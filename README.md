@@ -1,1 +1,1 @@
-# pt-check
+#tags.py是一个qbittorrent的修改tags代码样例
