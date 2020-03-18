@@ -37,6 +37,8 @@ import transmissionrpc
 三、2020-03-17：V2.2
     1,GetDirName, files == 1, bug
     2,checkdisk
+四、2020-03-18：V2.3
+    1、把种子信息备份文件TorrentListBackup，增加保留当月及上月的备份文件。后缀为"."+"日期"
 """
 
  
@@ -188,8 +190,8 @@ class TorrentInfo :
         #self.ID
         self.Name = Name 
         self.Done = Done              #完成率*100,取整后转换为数字
-        self.Status = Status          #for TR:4位字符，Idle,Stop,Down,UP &,Seed
-                                      #for QB:4位字符，取自：PausedUP，PausedDL，downloading，stalledUP
+        self.Status = Status          #for TR:Idle,Down,UP &,Seed对应go，Stop对应stop
+                                      #for QB:downloading，stalledUP对应go，PausedUP，PausedDL对应stop
         self.Category = Category      #分类：0:做种 1:下载 2:刷上传
         self.Tags  = Tags             #标签
         self.SavedPath = SavedPath    #保存路径/media/root/BT/movies(temp),wd4t等
@@ -399,7 +401,7 @@ def TransformTorrent(Client,torrent):
         HASH = torrent.hashString
         Name = torrent.name
         Done = int(torrent.percentDone*100)
-        Status = torrent.status
+        if torrent.status == ""
         Category = ""
         Tags = ""
         SavedPath = torrent.downloadDir
@@ -490,9 +492,34 @@ def ReadPTBackup():
 def WritePTBackup():
     """
     把当前种子列表写入备份文件
+    1、每一天把昨天的文件备份成TorrentListBackup+"."+gLastCheckDate，例如pt.txt.2020-03-17
+    2、删除不是这个月以及上个月日期的所有备份文件（最多保留当前月及上月的备份数据）
+    3、当天的备份文件为TorrentListBackup+".old" 
     """
 
-    LogClear(TorrentListBackup)
+    if gIsNewDay == 1 :
+        tThisMonth = gToday[0:7] ; tThisYear = gToday[0:4]
+        if tThisMonth[5:7] == "01" : 
+            tLastMonth = str(int(tThisYear)-1)+"-"+"12"      
+        else : 
+            tLastMonth = tThisYear+"-"+str(int(tThisMonth[5:7])-1).zfill(2)
+        
+        tFileName = os.path.basename(TorrentListBackup)
+        tLength = len(tFileName)
+        tDirName = os.path.dirname(TorrentListBackup)
+        for file in os.listdir(tDirName):
+            if file[:tLength] == tFileName and len(file) == tLength+11:  #说明是TorrentListBackup的每天备份文件
+                if file[tLength+1:tLength+8] != tLastMonth and file[tLength+1:tLength+8] != tThisMonth : #仅保留这个月和上月的备份文件
+                    try :   os.remove(os.path.join(tDirName,file))
+                    except: ErrorLog("failed to delete file:"+os.path.join(tDirName,file))
+        
+        #把旧文件备份成昨天日期的文件,后缀+"."+gLastCheckDate
+        tLastDayFileName = TorrentListBackup+"."+gLastCheckDate
+        if os.path.isfile(TorrentListBackup) :
+            if  os.path.isfile(tLastDayFileName) : os.remove(tLastDayFileName)
+            os.rename(TorrentListBackup,tLastDayFileName) 
+    else :
+        LogClear(TorrentListBackup)        
     
     try :
         fo = open(TorrentListBackup,"w")
