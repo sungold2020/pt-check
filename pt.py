@@ -8,7 +8,7 @@ import datetime
 import time
 from pathlib import Path
 import datetime
-import qbittorrent 
+import qbittorrentapi 
 import transmissionrpc
  
 """
@@ -39,18 +39,22 @@ import transmissionrpc
     2,checkdisk
 四、2020-03-18：V2.3
     1、把种子信息备份文件TorrentListBackup，增加保留当月及上月的备份文件。后缀为"."+"日期"
+V3 ：
+    增加MoveTorrents，从QB状态为停止，分类为“保种”的种子转移到TR进行做种
+    
+
 """
 
  
 #程序运行设置
 NUMBEROFDAYS = 3                           #连续多少天低于阈值
 UPLOADTHRESHOLD = 10000000                 #阈值，单位Bytes
-TorrentListBackup = "/root/.local/share/data/pt/pt.txt"  #种子信息备份目录（重要的是每天的上传量）
-DebugLogFile = "log/debug.log"             #日志，可以是相对路径，也可以是绝对路径
-ErrorLogFile = "log/error.log"             #错误日志
+
+DebugLogFile = "log/debug2.log"             #日志，可以是相对路径，也可以是绝对路径
+ErrorLogFile = "log/error2.log"             #错误日志
                                            #TR的保种路径，如果多个就需要修改代码
 TRSeedFolderList = ["/media/root/BT/keep" ,"/root/e52/books"]
-                                           #下载保存路径的列表，不在这个列表中的种子会报错
+                                           #下载保存路径的列表，不在这个列表中的种子会报错.其中第一个路径用于创建符号链接来转移QB种子
 RootFolderList = [  "/sg3t",\
                     "/media/root/wd4t",\
                     "/media/root/BT/keep",\
@@ -60,13 +64,16 @@ RootFolderList = [  "/sg3t",\
                     "/root/e52/books" ]
 PathLength = len("/media/root/BT/movies")
 CheckDiskList = [ "/media/root/wd4t","/media/root/BT/movies"]
-IgnoreListFile = "config/ignore.txt"
-                        
+TorrentListBackup = "data/pt.txt"  #种子信息备份目录（重要的是每天的上传量）
+IgnoreListFile = "data/ignore.txt"
+TRCategoryFile = "data/tr_category.txt"
+QBBackupDir = "/root/.local/share/data/qBittorrent/BT_backup"
+QBTorrentsBackupDir = "data/qb_backup"                        
 
 #程序易读性用，请勿修改
-SEEDING  = 0
-DOWNLOAD = 1
-UPLOAD   = 2
+STOP    = "STOP"
+GOING   = "GOING"
+ERROR   = 2
 TR       = "TR"
 QB       = "QB"
 CHECKERROR = -1
@@ -78,14 +85,18 @@ LOWUPLOAD = 3
 #可变全局变量
 global gPTIgnoreList             #checkdisk的忽略文件夹/名清单
 global gTorrentList              #种子信息清单
+global gTRCategoryList           #给TR用的分类列表，TR不支持分类，程序需要自己创建分类，文件保存在tr_category.txt
 global LastCheckDate 
 global gIsNewDay
 global gToday
+global gIsMove 
 gPTIgnoreList = []
 gTorrentList = []
+gTRCategoryList = []
 gLastCheckDate = "1970-01-01"
 gIsNewDay = 0
 gToday = "1970-01-01"
+gIsMove = False
 
 #记录日志用的函数############################################################
 def LogClear(FileName) :
@@ -192,7 +203,7 @@ class TorrentInfo :
         self.Done = Done              #完成率*100,取整后转换为数字
         self.Status = Status          #for TR:Idle,Down,UP &,Seed对应go，Stop对应stop
                                       #for QB:downloading，stalledUP对应go，PausedUP，PausedDL对应stop
-        self.Category = Category      #分类：0:做种 1:下载 2:刷上传
+        self.Category = Category      #分类：0:保种 1:下载 2:刷上传
         self.Tags  = Tags             #标签
         self.SavedPath = SavedPath    #保存路径/media/root/BT/movies(temp),wd4t等
 
@@ -207,6 +218,7 @@ class TorrentInfo :
                                       #名字,大小，完成率
         self.DirName = ""             #种子目录名称
         self.RootFolder = ""          #种子保存的路径所在根目录
+        self.IsRootFolder = True      #QB才有效：是否创建了子文件夹
 
         self.Checked = 1              #每次检查时用于标记它是否标记到，检查结束后，如果发现Checked为0，说明种子已经被删除。
                                       #新建对象时肯定Checked=1
@@ -225,8 +237,12 @@ class TorrentInfo :
         self.FileName = []
         i = 0; 
         while i < len(files) :
-            Name = files[i]['name']  
-            Size = files[i]['size']
+            if self.Client == TR :
+                Name = files[i]['name']  
+                Size = files[i]['size']
+            else:
+                Name = files[i].name
+                Size = files[i].size
             #Done = int (files[i]['completed']/Size * 100)    
             self.FileName.append( {'Name':Name,'Size':Size} )
             i += 1
@@ -289,10 +305,26 @@ class TorrentInfo :
         if gTorrentList[tNoOfTheList].Tags        != self.Tags       : gTorrentList[tNoOfTheList].Tags        = self.Tags       ; tUpdate += 1
         if gTorrentList[tNoOfTheList].SavedPath   != self.SavedPath  : gTorrentList[tNoOfTheList].SavedPath   = self.SavedPath  ; tUpdate += 1
         if gTorrentList[tNoOfTheList].AddDateTime != self.AddDateTime: gTorrentList[tNoOfTheList].AddDateTime = self.AddDateTime; tUpdate += 1
+        if gTorrentList[tNoOfTheList].IsRootFolder != self.IsRootFolder: gTorrentList[tNoOfTheList].IsRootFolder = self.IsRootFolder; tUpdate += 1
         if gTorrentList[tNoOfTheList].RootFolder  != self.RootFolder : gTorrentList[tNoOfTheList].RootFolder  = self.RootFolder ; tUpdate += 1
         if gTorrentList[tNoOfTheList].DirName     != self.DirName    : gTorrentList[tNoOfTheList].DirName     = self.DirName    ; tUpdate += 1
         if gTorrentList[tNoOfTheList].FileName    != self.FileName   : gTorrentList[tNoOfTheList].FileName    = self.FileName   ; tUpdate += 1
 
+        """tUpdate = 0
+        if gTorrentList[tNoOfTheList].Name        != self.Name       : gTorrentList[tNoOfTheList].Name        = self.Name       ; tUpdate += 1;DebugLog("name change,old="+gTorrentList[tNoOfTheList].Name+"::now="+self.Name)
+        if gTorrentList[tNoOfTheList].Done        != self.Done       : gTorrentList[tNoOfTheList].Done        = self.Done       ; tUpdate += 1;DebugLog("Done change,old="+gTorrentList[tNoOfTheList].Done+"::now="+self.Done)
+        if gTorrentList[tNoOfTheList].Status      != self.Status     : gTorrentList[tNoOfTheList].Status      = self.Status     ; tUpdate += 1;DebugLog("Status change,old="+gTorrentList[tNoOfTheList].Status+"::now="+self.Status)
+        if gTorrentList[tNoOfTheList].Category    != self.Category   : gTorrentList[tNoOfTheList].Category    = self.Category   ; tUpdate += 1;DebugLog("Category change,old="+gTorrentList[tNoOfTheList].Category+"::now="+self.Category)
+        if gTorrentList[tNoOfTheList].Tags        != self.Tags       : gTorrentList[tNoOfTheList].Tags        = self.Tags       ; tUpdate += 1;DebugLog("Tags change,old="+gTorrentList[tNoOfTheList].Tags+"::now="+self.Tags)
+        if gTorrentList[tNoOfTheList].SavedPath   != self.SavedPath  : gTorrentList[tNoOfTheList].SavedPath   = self.SavedPath  ; tUpdate += 1;DebugLog("SavedPath change,old="+gTorrentList[tNoOfTheList].SavedPath+"::now="+self.SavedPath)
+        if gTorrentList[tNoOfTheList].AddDateTime != self.AddDateTime: gTorrentList[tNoOfTheList].AddDateTime = self.AddDateTime; tUpdate += 1;DebugLog("AddDateTime change,old="+gTorrentList[tNoOfTheList].AddDateTime+"::now="+self.AddDateTime)
+        if gTorrentList[tNoOfTheList].RootFolder  != self.RootFolder : gTorrentList[tNoOfTheList].RootFolder  = self.RootFolder ; tUpdate += 1;DebugLog("RootFolder change,old="+gTorrentList[tNoOfTheList].RootFolder+"::now="+self.RootFolder)
+        if gTorrentList[tNoOfTheList].DirName     != self.DirName    : gTorrentList[tNoOfTheList].DirName     = self.DirName    ; tUpdate += 1;DebugLog("DirName change,old="+gTorrentList[tNoOfTheList].DirName+"::now="+self.DirName)
+        if gTorrentList[tNoOfTheList].FileName    != self.FileName   : gTorrentList[tNoOfTheList].FileName    = self.FileName   ; tUpdate += 1;DebugLog("FileName change,old=")
+        """
+        #test
+        #print(str(gTorrentList[tNoOfTheList].IsRootFolder)+'|'+gTorrentList[tNoOfTheList].SavedPath+'|'+gTorrentList[tNoOfTheList].RootFolder+'|'+gTorrentList[tNoOfTheList].DirName+'|'+gTorrentList[tNoOfTheList].Name)
+            
         gTorrentList[tNoOfTheList].Checked = 1         
         
         if gIsNewDay == 1 :   #新的一天，更新记录每天的上传量（绝对值）
@@ -300,7 +332,7 @@ class TorrentInfo :
             if len(gTorrentList[tNoOfTheList].DateData) >= NUMBEROFDAYS+3: del gTorrentList[tNoOfTheList].DateData[0] #删除前面旧的数据
             
             if IsLowUpload(gTorrentList[tNoOfTheList].DateData) == 1 :
-                if self.Status[:4].lower() != 'stop' and self.Status[:4].lower() != 'paus' :
+                if self.Status != STOP :
                     if gTorrentList[tNoOfTheList].Client == QB and gTorrentList[tNoOfTheList].Category != '保种' : return LOWUPLOAD 
                     elif gTorrentList[tNoOfTheList].Client == TR  and IsSubDir(gTorrentList[tNoOfTheList].SavedPath,TRSeedFolderList) == 0 :  return LOWUPLOAD
                     else :   return UPDATED
@@ -353,7 +385,18 @@ class TorrentInfo :
         if len(self.FileName) == 0 or self.SavedPath == "" :
             ErrorLog("no file or SavedPath is empty:"+SavedPath+"::"+str(self.FileName))
             return -1
-            
+    
+        #如何判断是否创建了子文件夹IsRootFolder，所有的文件都包含了目录，而且是一致的。
+        self.IsRootFolder = True; tSubDirName = ""; i = 0   
+        while i < len(self.FileName) :
+            tIndex = (self.FileName[i]['Name']).find('/')
+            if tIndex == -1 :  self.IsRootFolder = False; break
+            if tSubDirName == "":
+                tSubDirName = (self.FileName[i]['Name'])[0:tIndex]
+            else :
+                if (self.FileName[i]['Name'])[0:tIndex] != tSubDirName : self.IsRootFolder = False; break
+            i += 1           
+               
         self.SavedPath = self.SavedPath.strip()
         if self.SavedPath[-1:] == '/' : self.SavedPath = self.SavedPath[:-1] #去掉最后一个字符'/'
         
@@ -401,22 +444,25 @@ def TransformTorrent(Client,torrent):
         HASH = torrent.hashString
         Name = torrent.name
         Done = int(torrent.percentDone*100)
-        if torrent.status == ""
+        #Status = torrent.status 
+        if torrent.status[0:4].lower() == "stop": Status = STOP
+        else :                                    Status = GOING
         Category = ""
         Tags = ""
         SavedPath = torrent.downloadDir
         AddDateTime = time.strftime( '%Y-%m-%d %H:%M:%S', time.localtime(torrent.addedDate) ) 
         DateData = [] ;  DateData.append({'Date':gToday,'Data':torrent.uploadedEver})  
     else :
-        HASH = torrent['hash']
-        Name = torrent['name']
-        Done = int(torrent['progress']*100)
-        Status = torrent['state']
-        Category = torrent['category']
-        Tags = torrent['tags']
-        SavedPath = torrent['save_path']
-        AddDateTime = time.strftime( '%Y-%m-%d %H:%M:%S', time.localtime(torrent['added_on']) ) 
-        DateData = [] ;  DateData.append({'Date':gToday,'Data':torrent['uploaded']})   
+        HASH = torrent.hash
+        Name = torrent.name
+        Done = int(torrent.progress*100)
+        if torrent.state[:5].lower() == "pause" : Status = STOP
+        else :                                    Status = GOING
+        Category = torrent.category
+        Tags = torrent.tags
+        SavedPath = torrent.save_path
+        AddDateTime = time.strftime( '%Y-%m-%d %H:%M:%S', time.localtime(torrent.added_on) ) 
+        DateData = [] ;  DateData.append({'Date':gToday,'Data':torrent.uploaded})   
 
     return  TorrentInfo(Client,HASH,Name,Done,Status,Category,Tags,SavedPath,AddDateTime,DateData)
     
@@ -469,6 +515,8 @@ def ReadPTBackup():
     for line in open(TorrentListBackup):
         Client,HASH,Name,tDoneStr,Status,Category,Tags,SavedPath,AddDateTime,RootFolder,DirName,tDateDataStr = line.split('|',11)
 
+        if Status[:4].lower() == 'stop' or Status[:4].lower() == 'paus' : Status = STOP
+        else :                                                             Status = GOING
         Done = int(float(tDoneStr))
         if tDateDataStr [-1:] == '\n' :  tDateDataStr = tDateDataStr[:-1]  #remove '\n'
         #DebugLog("DateData="+tDateDataStr)
@@ -520,7 +568,7 @@ def WritePTBackup():
             os.rename(TorrentListBackup,tLastDayFileName) 
     else :
         LogClear(TorrentListBackup)        
-    
+
     try :
         fo = open(TorrentListBackup,"w")
     except:
@@ -588,9 +636,12 @@ def CheckTorrents(Client):
             tr_client = transmissionrpc.Client('localhost', port=9091,user='dummy',password='moonbeam')
             torrents = tr_client.get_torrents()
         else :
-            qb_client = qbittorrent.Client('http://127.0.0.1:8989/')
-            qb_client.login('admin', 'moonbeam')
-            torrents = qb_client.torrents()
+            #qb_client = qbittorrent.Client('http://127.0.0.1:8989/')
+            #qb_client.login('admin', 'moonbeam')
+            #torrents = qb_client.torrents()
+            qb_client = qbittorrentapi.Client(host='localhost:8989', username='admin', password='moonbeam')            
+            qb_client.auth_log_in()
+            torrents = qb_client.torrents_info()            
         DebugLog("connect to  "+Client)
     except:
         ErrorLog("failed to connect to "+Client)
@@ -600,7 +651,8 @@ def CheckTorrents(Client):
     for torrent in torrents: 
         tTorrentInfo = TransformTorrent(Client,torrent)
         if Client == TR:  tReturn = tTorrentInfo.CheckTorrent(torrent.files())
-        else :            tReturn = tTorrentInfo.CheckTorrent(qb_client.get_torrent_files(torrent['hash']))
+        #else :            tReturn = tTorrentInfo.CheckTorrent(qb_client.get_torrent_files(torrent['hash']))
+        else :            tReturn = tTorrentInfo.CheckTorrent(torrent.files)
         
         if tReturn == CHECKERROR :        tNumberOfError += 1
         elif tReturn == LOWUPLOAD :       tNumberOfPaused += 1
@@ -621,7 +673,7 @@ def CheckTorrents(Client):
                 torrent.stop()
                 DebugLog("stop torrent for low upload, name="+torrent.name)
             else :            
-                qb_client.pause(torrent['hash'])
+                torrent.pause()
                 DebugLog("stop torrent for low upload, name="+torrent['name'])
                 
         tNumberOfTorrent += 1
@@ -719,18 +771,144 @@ def CheckDisk(DiskPath):
             DebugLog("Error：not file or dir")
 #end def CheckDisk
 
+def ReadTRCategory():
+    """
+    读取TRCategory分类信息，可以手工维护
+    """
+    global gTRCategoryList
+    if os.path.isfile(TRCategoryFile):
+        #print("find file:"+TRCategoryFile)
+        for line in open(TRCategoryFile):
+            Category,Name,HASH = line.slit('|',2)
+            gTRCategoryList.append({'Category':Category,'HASH':HASH,'Name':Name})
+        return 1
+    else :
+        print("not find file:"+TRCategoryFile)
+        DebugLog(TRCategoryFile+" is not exist")
+        return 0
+   
+def WriteTRCategory():
+    """
+    把TR的分类信息写入备份文件
+    """
+    LogClear(TRCategoryFile)        
+    try :
+        fo = open(TRCategoryFile,"w")
+    except:
+        ErrorLog("failed to open："+TRCategoryFile)
+        return -1
         
+    i = 0; tLength = len(gTRCategoryList)
+    while i < tLength :
+        tStr = gTRCategoryList[i]['Category']+'|'+gTRCategoryList[i]['Name']+'|'+gTRCategoryList[i]['HASH']+'\n'
+        fo.write(tStr)
+        i += 1   
+    fo.close()
+    return 1
+
+
+def MoveTorrents():
+    """
+    将QB中类别为'保种'，状态为pause的种子移到tr去保种
+    返回值：转移保种的种子数
+    
+    首先连接到qb/tr客户端
+    1、逐个匹配gTorrentList中符合条件的种子
+    2、备份转移种子的torrent文件和fastresume文件
+    3、在BT/keep创建链接到savedpath
+    4、调用tr增加种子
+    5，修改QB标签为”转移做种“
+    6、加入tr_category并写入文件
+    最后，再调用一下checktorrent(tr)
+    """
+
+    try:
+        tr_client = transmissionrpc.Client('localhost', port=9091,user='dummy',password='moonbeam')
+        qb_client = qbittorrentapi.Client(host='localhost:8989', username='admin', password='moonbeam')            
+        qb_client.auth_log_in()
+        DebugLog("connected to QB and TR")
+    except:
+        DebugLog("failed to connect QB  or TR")
+    
+    tNumber = 0
+    for qb_torrent in qb_client.torrents_info():        
+        #只对QB的”保种“类别，状态为停止的种子才进行转移
+        if not(qb_torrent.state[:5].lower() == 'pause' and qb_torrent.category == '保种') : 
+            continue
+        #备份转移种子的torrent文件和fastresume文件
+        tTorrentFile = os.path.join(QBBackupDir,qb_torrent.hash+".torrent")
+        tDestTorrentFile = os.path.join(QBTorrentsBackupDir,qb_torrent.hash+".torrent")
+        tResumeFile  = os.path.join(QBBackupDir,qb_torrent.hash+".fastresume")
+        tDestResumeFile  = os.path.join(QBTorrentsBackupDir,qb_torrent.hash+".fastresume")
+        try:
+            shutil.copyfile(tTorrentFile,tDestTorrentFile)
+            shutil.copyfile(tResumeFile ,tDestResumeFile)
+        except:
+            #print(tTorrentFile)
+            #print(tResumeFile)
+            #print(tDestTorrentFile)
+            ErrorLog("failed to copy torrent and resume file:"+gTorrentList[i].HASH)
+            continue
+
+        #test
+        #print(str(gTorrentList[i].IsRootFolder)+'|'+gTorrentList[i].SavedPath+'|'+gTorrentList[i].RootFolder+'|'+gTorrentList[i].DirName)
+        #for file in gTorrentList[i].FileName: print(file)
+        tNoOfList = FindTorrent(qb_torrent.hash)
+        if gTorrentList[tNoOfList].IsRootFolder == True :  
+            tDestSavedPath = GetPhysicalPath(gTorrentList[tNoOfList].SavedPath)
+        else :   #为TR的保存路径创建链接
+            tLink = os.path.join(TRSeedFolderList[0],gTorrentList[tNoOfList].Name) 
+            try:    
+                if not os.path.exists(tLink) :
+                    os.symlink(gTorrentList[tNoOfList].SavedPath,tLink)
+            except:
+                ErrorLog("failed create link:ln -s "+gTorrentList[tNoOfList].SavedPath+" "+tLink)
+                continue            
+            tDeskSavedPath = TRSeedFolderList[0]
+        #TR加入种子
+        try:
+            tr_torrent = tr_client.add_torrent(torrent=tTorrentFile,download_dir=tDeskSavedPath,paused=True)
+        except ValueError as err:
+            print(err)
+            ErrorLog("failed to add torrent:"+tTorrentFile)
+            continue
+        except  transmissionrpc.TransmissionError as err:
+            print(err)
+            ErrorLog("failed to add torrent:"+tTorrentFile)
+            continue            
+        except transmissionrpc.HTTPHandlerError as err:
+            print(err)
+            ErrorLog("failed to add torrent:"+tTorrentFile)
+            continue               
+        else:
+            DebugLog("move torrent to tr:"+tr_torrent.name+'::'+tr_torrent.hashString)
+        #QB设置类别为"转移"
+        try:
+            #qb_torrent = qb_client.get_torrent(hash=gTorrentList[i].HASH)
+            qb_torrent.set_category(category="转移")
+        except:
+            ErrorLog("failed to set category:"+gTorrentList[tNoOfList].Name)
+        else:
+            gTorrentList[tNoOfList].Category = "转移"
+            
+        #加入TRCategoryList
+        gTRCategoryList.append({'Category':"保种", 'HASH':tr_torrent.hashString, 'Name':tr_torrent.name})
+        tNumber += 1
+
+    if WriteTRCategory() == 1:
+        DebugLog("write tr_category to:"+TRCategoryFile)
+    return tNumber
+#end def MoveTorrents    
+    
 if __name__ == '__main__' :
 
     tCurrentTime = datetime.datetime.now()
-    #LogClear(DebugLogFile)
-    #LogClear(ErrorLogFile)
     
     DebugLog("Begin ReadPTBackup from "+TorrentListBackup)
     if ReadPTBackup() == 1:
         DebugLog("success ReadPTBackup. set gLastCheckDate="+gLastCheckDate)
         DebugLog(str(len(gTorrentList)).zfill(4)+" torrents readed.")
-    
+        
     if len(sys.argv) >= 2 :
         if sys.argv[1] == "now":
             gIsNewDay =1
@@ -738,7 +916,11 @@ if __name__ == '__main__' :
             DebugLog("check torrents immediately one time","p")
             CheckTorrents(TR)
             CheckTorrents(QB)
+            #if WritePTBackup() == 1:
+            #    DebugLog(str(len(gTorrentList)).zfill(4)+" torrents writed.")  
             DebugLog("end check torrents one time","p")
+            tNumber = MoveTorrents()
+            if tNumber > 0 : DebugLog(str(tNumber)+" torrents moved")
             exit()
             
         if sys.argv[1] == "checkdisk":
@@ -764,7 +946,8 @@ if __name__ == '__main__' :
             DebugLog("begin WritePTBackup to"+TorrentListBackup)
             if WritePTBackup() == 1:
                 DebugLog(str(len(gTorrentList)).zfill(4)+" torrents writed.")  
-
+        tNumber = MoveTorrents()
+        if tNumber > 0 : DebugLog(str(tNumber)+" torrents moved")
         gLastCheckDate = tCurrentTime.strftime("%Y-%m-%d")
         DebugLog("update gLastCheckDate="+gLastCheckDate)        
         DebugLog("begin sleep")
