@@ -18,44 +18,22 @@ import movie
 """
 #运行日志
 ErrorLogFile="/root/py/log/checkerror.log"
-#NoteLogFile="$CurDir/note.log
-CorrectLogFile="/root/py/log/checkcorrect.log"
 ExecLogFile="/root/py/log/checkexec.log"
 DebugLogFile="/root/py/log/checkdebug.log"
-
+ToBeExecDirName = False     # DirName名称
+ToBeExecRmdir   = False     # 从子文件夹将内容提上来 删除空子目录
+    
 #全局变量
 g_MyMovies = []
 g_Count = 0
 g_CheckDiskPath = ""
 g_CheckDisk = ""
 
-#记录日志用的函数############################################################
 def LogClear(FileName) :
     if os.path.isfile(FileName):
         if os.path.isfile(FileName+".old"):    os.remove(FileName+".old")
         os.rename(FileName,FileName+".old")
       
-def Log(FileName,Str) :
-    fo = open(FileName,"a+")
-    #tCurrentTime = datetime.datetime.now()
-    #fo.write(tCurrentTime.strftime('%Y-%m-%d %H:%M:%S')+"::")
-    fo.write(Str)
-    fo.write('\n')
-    fo.close()
-
-def DebugLog( Str, Mode = "np"):    
-    print(Str)
-    Log(DebugLogFile,Str)
-    if Mode == "p": print(Str)
-
-def ExecLog(Str):
-    DebugLog(Str)
-    Log(ExecLogFile,Str)
-    
-def ErrorLog(Str):
-    print(Str)
-    DebugLog(Str)
-    Log(ErrorLogFile,Str)
 
 def CheckDiskMovie(DiskPath):
     '''
@@ -67,7 +45,7 @@ def CheckDiskMovie(DiskPath):
     global g_MyMovies
     global g_Count
     
-    if not os.path.isdir(DiskPath) :  DebugLog(DiskPath+"is not  a dir"); return -1
+    if not os.path.isdir(DiskPath) :  print(DiskPath+"is not  a dir"); return -1
     for file in os.listdir(DiskPath):
         fullpathfile = os.path.join(DiskPath,file)
         if os.path.isdir(fullpathfile):
@@ -75,21 +53,19 @@ def CheckDiskMovie(DiskPath):
             #一些特殊文件夹忽略
             if file      == 'lost+found' or \
                file[0:6] == '.Trash' or \
+               file[0:8] == '$RECYCLE' or\
                file      == '0000':
-                DebugLog ("ignore some dir:"+file)
+                print ("ignore some dir:"+file)
                 continue 
 
             g_MyMovies.append(movie.Movie(DiskPath,file))
             if g_MyMovies[g_Count].CheckMovie() == 0:
-                DebugLog ("CheckMovie error:"+g_MyMovies[g_Count].DirName)
-                DebugLog ("")
-                DebugLog ("")
+                print ("CheckMovie error:"+g_MyMovies[g_Count].DirName)
+
             else:
-                DebugLog ("CheckMovie correct:"+g_MyMovies[g_Count].DirName)                
+                print ("CheckMovie correct:"+g_MyMovies[g_Count].DirName)                
             g_Count += 1
-        
-
-
+    return 1    
 
 if __name__ == '__main__' :
 
@@ -111,8 +87,8 @@ if __name__ == '__main__' :
         print ("sg3t    == /media/root/sg3t")
         print ("5       == /media/root/sg3t-2")
         print ("sg3t-2  == /media/root/sg3t-2")
-        print ("6       == /media/root/sg8t")
-        print ("sg8t    == /media/root/sg8t")
+        print ("6       == /media/root/SG8T")
+        print ("sg8t    == /media/root/SG8T")
         Choise = input("your choise is :")
         print (Choise) 
     elif len(sys.argv) == 2:    
@@ -134,11 +110,17 @@ if __name__ == '__main__' :
     elif Choise == "5" or Choise.lower() == "sg3t-2" :
         g_CheckDiskPath = "/media/root/sg3t-2" ; g_CheckDisk = "sg3t-2"
     elif Choise == "6" or Choise.lower() == "sg8t" :
-        g_CheckDiskPath = "/media/root/sg8t" ; g_CheckDisk = "sg8t"
+        g_CheckDiskPath = "/media/root/SG8T" ; g_CheckDisk = "sg8t"
     else :
         g_CheckDiskPath = Choise ; g_CheckDisk = ""
         print ("your choise is :"+Choise)
 
+    movie.Movie.ErrorLogFile  =  ErrorLogFile
+    movie.Movie.ExecLogFile  =  ExecLogFile
+    movie.Movie.DebugLogFile  =  DebugLogFile
+    movie.Movie.ToBeExecDirName  =  ToBeExecDirName
+    movie.Movie.ToBeExecRmdir  =  ToBeExecRmdir
+    
     print ("begin check movie"+g_CheckDiskPath)
     g_MyMovies = []; g_Count = 0
     CheckDiskMovie(g_CheckDiskPath)

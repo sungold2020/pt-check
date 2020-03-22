@@ -20,7 +20,7 @@ import transmissionrpc
 3、新的一天，记录当天的种子上传量（绝对值），开始统计NUMBEROFDAYS内的相对下载量，
     如果连续NUMBEROFDAYS内上传量低于阈值UPLOADTHRESHOLD，就认为最近低上传。而且不属于保种的种子就暂停。如何判断是否属于保种呢？
     对于QB：如果种子分类不属于'保种'的，就暂停种子。
-    对于TR：如果报错路径不是"TRSEEDINGPATH"，就暂停种子
+    对于TR：如果报错路径不在TRSeedFolderList，就暂停种子
 4、为了方便QB的WEB页浏览，我根据TRACKER进行了标签设置，这样如果可以自动设置标签（我目前区分为frds/mteam/other）
 5、最后更新列表并写入备份文件
 
@@ -47,9 +47,19 @@ V3 ：
 """
 
  
-#程序运行设置
+#运行设置############################################################################
+#日志文件
 DebugLogFile = "log/debug2.log"             #日志，可以是相对路径，也可以是绝对路径
 ErrorLogFile = "log/error2.log"             #错误日志
+
+#TR/QB的连接设置    
+TR_IP = "localhost"
+TR_PORT = 9091
+TR_USER = 'admin'
+TR_PWD  = 'adminadmin'
+QB_IPPORT = 'localhost:8080'
+QB_USER = 'admin'
+QB_PWD =  'adminadmin'
 
 #连续NUMBEROFDAYS上传低于UPLOADTHRESHOLD，并且类别不属于'保种'的种子，会自动停止。
 #QB：把保种的种子分类设为"保种"，就不会停止
@@ -77,10 +87,11 @@ CheckDiskList = [ "/media/root/wd4t","/media/root/BT/movies"]
 IgnoreListFile = "data/ignore.txt"
 
 #从QB转移到TR做种：定期检查QB状态为停止且分类为‘保种’的会转移到TR做种，转移成功后，QB种子分类会设置为'转移'
-#QB的备份目录
+#QB的备份目录BT_backup，我的运行环境目录如下，如有不同请搜索qbittorrent在不同OS下的配置
 QBBackupDir = "/root/.local/share/data/qBittorrent/BT_backup"
 #转移做种以后，把种子文件和快速恢复文件转移到QBTorrentsBackupDir目录进行保存，以备需要
 QBTorrentsBackupDir = "data/qb_backup"                        
+#运行设置结束#################################################################################
 
 #程序易读性用，请勿修改
 STOP    = "STOP"
@@ -134,56 +145,7 @@ def ErrorLog(Str):
     Log(ErrorLogFile,Str)
 ################################################################################   
 
-#一些和运行环境无关的自定义函数############################################################### 
-def GetPhysicalPath(Path):
-    """
-    目的：将可能含链接的路径Path，转换为物理路径，然后返回
-    
-    输入：Path必须为绝对路径(以/开始),而且必须存在
-    返回值：物理路径，出错就否则为""
-    """
-    #首先检查Path的合法性：
-    tPathStr = Path.strip()
-    if tPathStr[:1] != '/'  : return ""   #第一个字符必须为/，表示是绝对路径
-    if not(os.path.isdir(tPathStr)) : return ""
-    
-    #DebugLog("before GetPhy:"+Path)
-    tPathStr = Path.strip()
-    if tPathStr[-1:] == '/' : tPathStr = tPathStr[:-1]    #去掉最后的'/'
-        
-    tPathStr = Path[1:]  #去掉第一个/
-    tDestPath = "/"
-    tFindIndex = 0
-    while tPathStr.find('/') != -1 :
-        tFindIndex = tPathStr.find('/')
-        tPath1 = os.path.join(tDestPath,tPathStr[:tFindIndex])
-        if os.path.islink(tPath1) :
-            tPath2 = os.readlink(tPath1)
-            if tPath2[:1] != '/' : #说明返回的不是绝对路径,那就把它join到tDestPath
-                tDestPath = os.path.join(tDestPath,tPath2)
-            else:
-                tDestPath = tPath2
-            #tDestPath = GetPhysicalPath(tDestPath) #再递归一下，确认tDestPath不再有链接
-            tPathStr = tPathStr[tFindIndex+1:]
-        else :
-            tDestPath = os.path.join(tDestPath,tPathStr[:tFindIndex])
-            tPathStr = tPathStr[tFindIndex+1:]
-        #DebugLog("tDestPath="+tDestPath+"  "+"tPathStr="+tPathStr)
-    #while结束后，最后一层目录
-    tPath1 = os.path.join(tDestPath,tPathStr)
-    if os.path.islink(tPath1) :
-        tPath2 = os.readlink(tPath1)
-        if tPath2[:1] != '/' : #说明返回的不是绝对路径,那就把它join到tDestPath
-            tDestPath = os.path.join(tDestPath,tPath2)
-        else:
-            tDestPath = tPath2
-        #tDestPath = GetPhysicalPath(tDestPath) #再递归一下，确认tDestPath不再有链接
-    else :
-        tDestPath = os.path.join(tDestPath,tPathStr)
-    
-    #DebugLog("after GetPhy:"+tDestPath)
-    return tDestPath
-#end def GetPhysicalPath
+
 
 def IsSubDir(SrcDir,DestDirList):
     """
@@ -200,10 +162,10 @@ def IsSubDir(SrcDir,DestDirList):
         tDestDir = DestDirList[i]
         if tDestDir[-1:] == '/' : tDestDir = tDestDir[:-1]  #移除最后一个 '/'
         if len(SrcDir) < tLenDest :  i += 1; continue
-        if SrcDir[:tLenDest] == tDestDir :  return 1
+        if SrcDir[:tLenDest] == tDestDir :  return True
         i += 1
-    return 0
-########################################################################################
+    return False
+
 
 class TorrentInfo :
     def __init__(self,Client,HASH,Name,Done,Status,Category,Tags,SavedPath,AddDateTime,DateData):
@@ -260,25 +222,8 @@ class TorrentInfo :
             self.FileName.append( {'Name':Name,'Size':Size} )
             i += 1
         
-        """#对于QB检查并设置标签，frds,mteam,other
-        if self.Client == QB:
-            Tracker = torrent['tracker']
-            Tags = torrent['tags']
-            if Tracker.find("keepfrds") >= 0 :
-                if Tags != 'frds':
-                    torrent.remove_tags()
-                    torrent.add_tags('frds')
-            elif Tracker.find("m-team") >= 0 :
-                if Tags != 'mteam':
-                    torrent.remove_tags()
-                    torrent.add_tags('mteam')
-            else:
-                if Tags != 'other':
-                    torrent.remove_tags()
-                    torrent.add_tags('other')
-        """
-        
-        #检查文件是否存在，一天完整检查一次，否则仅检查第一个文件
+
+        #检查文件是否存在，一天完整检查一次，否则仅检查分类不属于保种的第一个文件
         if self.Done == 100 :
             if gIsNewDay == 1 :
                 i = 0 
@@ -291,12 +236,15 @@ class TorrentInfo :
                         ErrorLog(tFullFileName+" file size error. torrent size:"+str(self.FileName[i]['Size']))
                         return CHECKERROR
                     i+=1
-            else :
-                tFullFileName = os.path.join(self.SavedPath, self.FileName[0]['Name'])
-                if not os.path.isfile(tFullFileName) :
-                    ErrorLog(tFullFileName+" does not exist")
-                    return CHECKERROR
-        
+            else:
+                if self.Client == QB and (self.Category ==  '保种' or self.Category == '转移') : pass
+                elif  self.Client == TR and IsSubDir(self.SavedPath,TRSeedFolderList) : pass
+                else :
+                    DebugLog("check torrent file:"+self.Name+"::"+self.SavedPath)
+                    tFullFileName = os.path.join(self.SavedPath, self.FileName[0]['Name'])
+                    if not os.path.isfile(tFullFileName) :
+                        ErrorLog(tFullFileName+" does not exist")
+
         #获取RootFolder和DirName
         if self.GetDirName() == -1:
             return CHECKERROR
@@ -344,10 +292,10 @@ class TorrentInfo :
             gTorrentList[tNoOfTheList].DateData.append(self.DateData[0])
             if len(gTorrentList[tNoOfTheList].DateData) >= NUMBEROFDAYS+3: del gTorrentList[tNoOfTheList].DateData[0] #删除前面旧的数据
             
-            if IsLowUpload(gTorrentList[tNoOfTheList].DateData) == 1 :
+            if IsLowUpload(gTorrentList[tNoOfTheList].DateData) :
                 if self.Status != STOP :
                     if gTorrentList[tNoOfTheList].Client == QB and gTorrentList[tNoOfTheList].Category != '保种' : return LOWUPLOAD 
-                    elif gTorrentList[tNoOfTheList].Client == TR  and IsSubDir(gTorrentList[tNoOfTheList].SavedPath,TRSeedFolderList) == 0 :  return LOWUPLOAD
+                    elif gTorrentList[tNoOfTheList].Client == TR  and IsSubDir(gTorrentList[tNoOfTheList].SavedPath,TRSeedFolderList) == False :  return LOWUPLOAD
                     else :   return UPDATED
      
             return UPDATED
@@ -485,19 +433,19 @@ def IsLowUpload(DateData):
     """
     #包括今天在内，至少要有NUMBEROFDAYS+1天数据
     tLength = len(DateData)
-    if tLength < NUMBEROFDAYS + 1:     return 0
+    if tLength < NUMBEROFDAYS + 1:     return False
 
     #从尾部开始循环，尾部日期是最新的
     i = tLength - 1; tDays = 0  
     while i > 1 and tDays < NUMBEROFDAYS:
         tDeltaData = (DateData[i])['Data'] - (DateData[i-1])['Data']
         if tDeltaData < UPLOADTHRESHOLD :    tDays += 1
-        else:    return 0  #有一天高于阈值就退出
+        else:    return False  #有一天高于阈值就退出
         i -= 1
     
     #运行到这，tDays应该就等于NUMBEROFDAYS,不过代码还是加一个判断
-    if tDays >= NUMBEROFDAYS : return 1
-    else : return 0
+    if tDays >= NUMBEROFDAYS : return True
+    else : return False
         
 def FindTorrent(Client,HASH):
     """
@@ -643,13 +591,13 @@ def CheckTorrents(Client):
     #连接Client并获取TorrentList列表
     try:
         if Client == TR :
-            tr_client = transmissionrpc.Client('localhost', port=9091,user='dummy',password='moonbeam')
+            tr_client = transmissionrpc.Client(TR_IP, port=TR_PORT,user=TR_USER,password=TR_PWD)
             torrents = tr_client.get_torrents()
         else :
-            #qb_client = qbittorrent.Client('http://127.0.0.1:8989/')
-            #qb_client.login('admin', 'moonbeam')
+            #qb_client = qbittorrent.Client(QB_IPPORT)
+            #qb_client.login(QB_USER, QB_PWD)
             #torrents = qb_client.torrents()
-            qb_client = qbittorrentapi.Client(host='localhost:8989', username='admin', password='moonbeam')            
+            qb_client = qbittorrentapi.Client(host=QB_IPPORT, username=QB_USER, password=QB_PWD)            
             qb_client.auth_log_in()
             torrents = qb_client.torrents_info()            
         DebugLog("connect to  "+Client)
@@ -660,10 +608,31 @@ def CheckTorrents(Client):
     # 开始逐个获取torrent并检查
     for torrent in torrents: 
         tTorrentInfo = TransformTorrent(Client,torrent)
+        
+        #对于QB检查并设置标签，frds,other
+        if Client == QB:
+            Tracker = torrent.tracker
+            Tags = torrent.tags
+            if Tracker.find("keepfrds") >= 0 :
+                if Tags != 'frds':
+                    torrent.remove_tags()
+                    torrent.add_tags('frds')
+            #elif Tracker.find("m-team") >= 0 :
+            #    if Tags != 'mteam':
+            #        torrent.remove_tags()
+            #        torrent.add_tags('mteam')
+            elif Tracker == "": pass
+            else:
+                if Tags != 'other':
+                    torrent.remove_tags()
+                    torrent.add_tags('other')
+                
         if Client == TR:  tReturn = tTorrentInfo.CheckTorrent(torrent.files())
         #else :            tReturn = tTorrentInfo.CheckTorrent(qb_client.get_torrent_files(torrent['hash']))
         else :            tReturn = tTorrentInfo.CheckTorrent(torrent.files)
-        
+
+
+                
         if tReturn == CHECKERROR :        tNumberOfError += 1
         elif tReturn == LOWUPLOAD :       tNumberOfPaused += 1
         elif tReturn == ADDED :           tNumberOfAdded += 1
@@ -736,13 +705,14 @@ def ReadIgnoreList() :
         return 0
 
 def InPTIgnoreList(SavedPath,DirName) :
+
     if SavedPath[-1:] == '/' : SavedPath = SavedPath[:-1]
     i = 0
     while i < len(gPTIgnoreList) :
         if (gPTIgnoreList[i])['Path'] == SavedPath and (gPTIgnoreList[i])['Name'] == DirName:
-            return 1
+            return True
         i += 1
-    return 0
+    return False
 
 def InTorrentList(SavedPath,DirName):
     """
@@ -752,9 +722,9 @@ def InTorrentList(SavedPath,DirName):
     while i < len(gTorrentList) :
         tSrcDirName = os.path.join(SavedPath,DirName)
         tDestDirName = os.path.join(gTorrentList[i].RootFolder,gTorrentList[i].DirName)
-        if GetPhysicalPath(tSrcDirName) == GetPhysicalPath(tDestDirName): return 1
+        if os.path.realpath(tSrcDirName) == os.path.realpath(tDestDirName): return True
         i += 1
-    return 0
+    return False
 #end def InTorrentList
     
 def CheckDisk(DiskPath):
@@ -772,12 +742,12 @@ def CheckDisk(DiskPath):
                 DebugLog ("ignore some dir:"+file)
                 continue 
             
-            if InPTIgnoreList(DiskPath,file) == 1:
+            if InPTIgnoreList(DiskPath,file):
                 DebugLog ("in Ignore List:"+DiskPath+"::"+file)
                 continue
 
-            if InTorrentList(DiskPath,file) == 1: pass #DebugLog(file+"::find in torrent list:")
-            else :                                ErrorLog(file+"::not find in torrent list:")
+            if InTorrentList(DiskPath,file) : pass #DebugLog(file+"::find in torrent list:")
+            else :                            ErrorLog(file+"::not find in torrent list:")
         else :
             DebugLog("Error：not file or dir")
 #end def CheckDisk
@@ -837,8 +807,8 @@ def MoveTorrents():
     """
 
     try:
-        tr_client = transmissionrpc.Client('localhost', port=9091,user='dummy',password='moonbeam')
-        qb_client = qbittorrentapi.Client(host='localhost:8989', username='admin', password='moonbeam')            
+        tr_client = transmissionrpc.Client(TR_IP, port=TR_PORT,user=TR_USER,password=TR_PWD)
+        qb_client = qbittorrentapi.Client(host=QB_IPPORT, username=QB_USER, password=QB_PWD)            
         qb_client.auth_log_in()
         DebugLog("connected to QB and TR")
     except:
@@ -869,14 +839,14 @@ def MoveTorrents():
         #for file in gTorrentList[i].FileName: print(file)
         tNoOfList = FindTorrent(QB,qb_torrent.hash)
         if gTorrentList[tNoOfList].IsRootFolder == True :  
-            tDestSavedPath = GetPhysicalPath(gTorrentList[tNoOfList].SavedPath)
+            tDestSavedPath = os.path.realpath(gTorrentList[tNoOfList].SavedPath)
         else :   #为TR的保存路径创建链接
             tLink = os.path.join(TRSeedFolderList[0],gTorrentList[tNoOfList].Name) 
             try:    
                 if not os.path.exists(tLink) :
-                    os.symlink(gTorrentList[tNoOfList].SavedPath,tLink)
+                    os.symlink(os.path.realpath(gTorrentList[tNoOfList].SavedPath),tLink)
             except:
-                ErrorLog("failed create link:ln -s "+gTorrentList[tNoOfList].SavedPath+" "+tLink)
+                ErrorLog("failed create link:ln -s "+os.path.realpath(gTorrentList[tNoOfList].SavedPath)+" "+tLink)
                 continue            
             tDeskSavedPath = TRSeedFolderList[0]
         #TR加入种子
@@ -909,8 +879,7 @@ def MoveTorrents():
         gTRCategoryList.append({'Category':"保种", 'HASH':tr_torrent.hashString, 'Name':tr_torrent.name})
         tNumber += 1
 
-    if WriteTRCategory() == 1:
-        DebugLog("write tr_category to:"+TRCategoryFile)
+    if tNumber > 0 and  WriteTRCategory() == 1: DebugLog("write tr_category to:"+TRCategoryFile)
     return tNumber
 #end def MoveTorrents    
     
