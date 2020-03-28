@@ -49,23 +49,24 @@ V3 ：
  
 #运行设置############################################################################
 #日志文件
-DebugLogFile = "log/debug2.log"             #日志，可以是相对路径，也可以是绝对路径
-ErrorLogFile = "log/error2.log"             #错误日志
+DebugLogFile = "log/debug1.log"             #日志，可以是相对路径，也可以是绝对路径
+ErrorLogFile = "log/error1.log"             #错误日志
 
 #TR/QB的连接设置    
 TR_IP = "localhost"
 TR_PORT = 9091
-TR_USER = 'admin'
-TR_PWD  = 'adminadmin'
-QB_IPPORT = 'localhost:8080'
+TR_USER = ''
+TR_PWD  = ''
+QB_IPPORT = 'localhost:8989'
 QB_USER = 'admin'
-QB_PWD =  'adminadmin'
+QB_PWD =  ''
 
 #连续NUMBEROFDAYS上传低于UPLOADTHRESHOLD，并且类别不属于'保种'的种子，会自动停止。
 #QB：把保种的种子分类设为"保种"，就不会停止
 #TR：因为不支持分类，通过制定文件夹方式来判断，如果保存路径在TRSeedFolderList中，认为属于“保种”
 NUMBEROFDAYS = 3                           #连续多少天低于阈值
-UPLOADTHRESHOLD = 10000000                 #阈值，单位Bytes
+UPLOADTHRESHOLD = 100000000                 #阈值，单位Bytes
+ToBePath = "/media/root/BT/tobe/"           #低上传的种子把文件夹移到该目录待处理
 #TR的保种路径，保存路径属于这个列表的就认为是保种,，如果类别为保种的话，就不会检查是否属于lowupload
 TRSeedFolderList = ["/media/root/BT/keep" ,"/root/e52/books"]
 #或者手工维护一个TR分类清单，从转移保种的会自动加入。
@@ -116,8 +117,9 @@ global gIsMove
 gPTIgnoreList = []
 gTorrentList = []
 gTRCategoryList = []
+gTRCategoryUpdate = False
 gLastCheckDate = "1970-01-01"
-gIsNewDay = 0
+gIsNewDay = False
 gToday = "1970-01-01"
 gIsMove = False
 
@@ -222,10 +224,13 @@ class TorrentInfo :
             self.FileName.append( {'Name':Name,'Size':Size} )
             i += 1
         
+        #获取RootFolder和DirName
+        if self.GetDirName() == -1:
+            return CHECKERROR
 
         #检查文件是否存在，一天完整检查一次，否则仅检查分类不属于保种的第一个文件
         if self.Done == 100 :
-            if gIsNewDay == 1 :
+            if gIsNewDay == True :
                 i = 0 
                 while i < len(self.FileName) :
                     tFullFileName = os.path.join(self.SavedPath, self.FileName[i]['Name'])
@@ -238,17 +243,22 @@ class TorrentInfo :
                     i+=1
             else:
                 if self.Client == QB and (self.Category ==  '保种' or self.Category == '转移') : pass
-                elif  self.Client == TR and IsSubDir(self.SavedPath,TRSeedFolderList) : pass
+                elif  self.Client == TR and (self.Category == '保种' or IsSubDir(self.SavedPath,TRSeedFolderList)) : pass
                 else :
-                    DebugLog("check torrent file:"+self.Name+"::"+self.SavedPath)
+                    #DebugLog("check torrent file:"+self.Name+"::"+self.SavedPath)
                     tFullFileName = os.path.join(self.SavedPath, self.FileName[0]['Name'])
                     if not os.path.isfile(tFullFileName) :
                         ErrorLog(tFullFileName+" does not exist")
 
-        #获取RootFolder和DirName
-        if self.GetDirName() == -1:
-            return CHECKERROR
-        
+        if self.Status == STOP and self.Category == '低上传':
+            tFullPath = os.path.join(self.RootFolder,self.DirName)
+            try:
+                shutil.move(tFullPath, ToBePath)
+            except:
+                ErrorLog("failed mv dir :"+tFullPath)
+            else:
+                DebugLog("lowupload, so mv dir "+tFullPath)
+            #DebugLog("lowupload, so mv dir "+tFullPath)
         #更新TorrentList        
         #首先找该种子是否存在
         tNoOfTheList = FindTorrent(self.Client,self.HASH)
@@ -288,16 +298,23 @@ class TorrentInfo :
             
         gTorrentList[tNoOfTheList].Checked = 1         
         
-        if gIsNewDay == 1 :   #新的一天，更新记录每天的上传量（绝对值）
+        if gIsNewDay == True :   #新的一天，更新记录每天的上传量（绝对值）
             gTorrentList[tNoOfTheList].DateData.append(self.DateData[0])
             if len(gTorrentList[tNoOfTheList].DateData) >= NUMBEROFDAYS+3: del gTorrentList[tNoOfTheList].DateData[0] #删除前面旧的数据
             
             if IsLowUpload(gTorrentList[tNoOfTheList].DateData) :
                 if self.Status != STOP :
-                    if gTorrentList[tNoOfTheList].Client == QB and gTorrentList[tNoOfTheList].Category != '保种' : return LOWUPLOAD 
-                    elif gTorrentList[tNoOfTheList].Client == TR  and IsSubDir(gTorrentList[tNoOfTheList].SavedPath,TRSeedFolderList) == False :  return LOWUPLOAD
-                    else :   return UPDATED
-     
+                    if gTorrentList[tNoOfTheList].Client == QB :
+                        if gTorrentList[tNoOfTheList].Category == '保种' or\
+                           gTorrentList[tNoOfTheList].Category == '转移' or\
+                           gTorrentList[tNoOfTheList].Category == '低上传': return UPDATED 
+                        else : return LOWUPLOAD
+                    else:
+                        if gTorrentList[tNoOfTheList].Category == '保种' or \
+                           gTorrentList[tNoOfTheList].Category == '低上传' or\
+                           IsSubDir(gTorrentList[tNoOfTheList].SavedPath,TRSeedFolderList) == True :  return UPDATED
+                        else :   return LOWUPLOAD
+                return UPDATED
             return UPDATED
         elif tUpdate > 0 :   return UPDATED
         else:                return NOCHANGE
@@ -407,8 +424,8 @@ def TransformTorrent(Client,torrent):
         Done = int(torrent.percentDone*100)
         #Status = torrent.status 
         if torrent.status[0:4].lower() == "stop": Status = STOP
-        else :                                    Status = GOING
-        Category = ""
+        else                                    : Status = GOING
+        Category = FindTRCategory(HASH)
         Tags = ""
         SavedPath = torrent.downloadDir
         AddDateTime = time.strftime( '%Y-%m-%d %H:%M:%S', time.localtime(torrent.addedDate) ) 
@@ -503,7 +520,7 @@ def WritePTBackup():
     3、当天的备份文件为TorrentListBackup+".old" 
     """
 
-    if gIsNewDay == 1 :
+    if gIsNewDay == True :
         tThisMonth = gToday[0:7] ; tThisYear = gToday[0:4]
         if tThisMonth[5:7] == "01" : 
             tLastMonth = str(int(tThisYear)-1)+"-"+"12"      
@@ -573,6 +590,7 @@ def CheckTorrents(Client):
     返回值：-1:错误，0:无更新，1:有更新 ，用于指示是否需要备份文件
     """
     global gTorrentList
+    global gTRCategoryUpdate
     
     tNumberOfAdded = 0
     tNumberOfDeleted = 0
@@ -628,8 +646,8 @@ def CheckTorrents(Client):
                     torrent.add_tags('other')
                 
         if Client == TR:  tReturn = tTorrentInfo.CheckTorrent(torrent.files())
-        #else :            tReturn = tTorrentInfo.CheckTorrent(qb_client.get_torrent_files(torrent['hash']))
         else :            tReturn = tTorrentInfo.CheckTorrent(torrent.files)
+        #else :            tReturn = tTorrentInfo.CheckTorrent(qb_client.get_torrent_files(torrent['hash']))
 
 
                 
@@ -641,19 +659,18 @@ def CheckTorrents(Client):
         else: ErrorLog("unknown return in CheckTorrent:"+str(tReturn))
 
         if tReturn == CHECKERROR :  
-            if Client == TR:  
-                torrent.stop()
-                DebugLog("stop torrent for error, name="+torrent.name)
-            else :            
-                qb_client.pause(torrent['hash'])
-                DebugLog("stop torrent for error, name="+torrent['name'])
+            if Client == TR:  torrent.stop()
+            else :            torrent.pause()
+            DebugLog("stop torrent for error, name="+torrent.name)
         if tReturn == LOWUPLOAD : 
             if Client == TR:  
                 torrent.stop()
-                DebugLog("stop torrent for low upload, name="+torrent.name)
+                UpdateTRCategory(torrent.hashString,'低上传',torrent.name)
+                gTRCategoryUpdate = True
             else :            
                 torrent.pause()
-                DebugLog("stop torrent for low upload, name="+torrent['name'])
+                torrent.set_category('低上传')
+            DebugLog("stop torrent for low upload, name="+torrent.name)
                 
         tNumberOfTorrent += 1
     #end for tr torrent 
@@ -775,6 +792,13 @@ def WriteTRCategory():
     """
     把TR的分类信息写入备份文件
     """
+    
+    #删除不存在的torrent
+    i = 0
+    while i < len(gTRCategoryList) :
+        if FindTorrent(TR,gTRCategoryList[i]['HASH']) == -1 : del gTRCategoryList[i]; continue
+        i += 1    
+    
     LogClear(TRCategoryFile)        
     try :
         fo = open(TRCategoryFile,"w")
@@ -788,8 +812,25 @@ def WriteTRCategory():
         fo.write(tStr)
         i += 1   
     fo.close()
+    
+    DebugLog(str(len(gTRCategoryList))+"category records writed to:"+TRCategoryFile)
     return 1
 
+def FindTRCategory(HASH):
+    """
+    """
+    for tCategory in gTRCategoryList:
+        if tCategory['HASH'] == HASH : return tCategory['Category']
+    return ""
+def UpdateTRCategory(HASH,Category,Name):
+    i = 0
+    while i < len(gTRCategoryList):
+        if gTRCategoryList[i]['HASH'] == HASH :
+            gTRCategoryList[i]['Category'] = Category
+            return 1
+        i += 1
+    gTRCategoryList.append({'Category':Category,'Name':Name,'HASH':HASH})
+    return 0
 
 def MoveTorrents():
     """
@@ -805,7 +846,8 @@ def MoveTorrents():
     6、加入tr_category并写入文件
     最后，再调用一下checktorrent(tr)
     """
-
+    global gTRCategoryUpdate
+    
     try:
         tr_client = transmissionrpc.Client(TR_IP, port=TR_PORT,user=TR_USER,password=TR_PWD)
         qb_client = qbittorrentapi.Client(host=QB_IPPORT, username=QB_USER, password=QB_PWD)            
@@ -869,7 +911,7 @@ def MoveTorrents():
         #QB设置类别为"转移"
         try:
             #qb_torrent = qb_client.get_torrent(hash=gTorrentList[i].HASH)
-            qb_torrent.set_category(category="转移")
+            qb_torrent.set_category("转移")
         except:
             ErrorLog("failed to set category:"+gTorrentList[tNoOfList].Name)
         else:
@@ -879,7 +921,7 @@ def MoveTorrents():
         gTRCategoryList.append({'Category':"保种", 'HASH':tr_torrent.hashString, 'Name':tr_torrent.name})
         tNumber += 1
 
-    if tNumber > 0 and  WriteTRCategory() == 1: DebugLog("write tr_category to:"+TRCategoryFile)
+    if tNumber > 0 : gTRCategoryUpdate = True
     return tNumber
 #end def MoveTorrents    
     
@@ -900,7 +942,7 @@ if __name__ == '__main__' :
     if len(sys.argv) >= 2 :
         #如果输入参数为now时，执行一次性的检查任务
         if sys.argv[1] == "now":
-            gIsNewDay =1; NUMBEROFDAYS += 1
+            gIsNewDay = True; NUMBEROFDAYS += 1
             DebugLog("check torrents immediately one time","p")
             CheckTorrents(TR)
             CheckTorrents(QB)
@@ -917,10 +959,11 @@ if __name__ == '__main__' :
         exit()
         
     while 1 == 1:
+        gTRCategoryUpdate = False
         tCurrentTime = datetime.datetime.now()
         gToday = tCurrentTime.strftime('%Y-%m-%d')
-        if gToday != gLastCheckDate :      gIsNewDay = 1
-        else:                              gIsNewDay = 0
+        if gToday != gLastCheckDate :      gIsNewDay = True
+        else:                              gIsNewDay = False
         
         tTRReturn = CheckTorrents(TR)
         tQBReturn = CheckTorrents(QB)
@@ -932,6 +975,9 @@ if __name__ == '__main__' :
         #转移QB的种子（停止状态，分类为保种）到TR做种
         tNumber = MoveTorrents()
         if tNumber > 0 : DebugLog(str(tNumber)+" torrents moved")
+        
+        #写入TRCategory
+        if gTRCategoryUpdate == True : WriteTRCategory()
         
         gLastCheckDate = tCurrentTime.strftime("%Y-%m-%d")
         DebugLog("update gLastCheckDate="+gLastCheckDate)        

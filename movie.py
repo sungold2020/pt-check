@@ -7,8 +7,14 @@ import shutil
 import datetime
 #import mysql.connector
 from pathlib import Path
-import check
 
+SRC_NOT_DIR       = -1
+DEST_NOT_DIR      = -2
+DEPTH_ERROR       = -3
+UNKNOWN_FILE_TYPE = -4
+FAILED_MOVE       = -5
+FAILED_RMDIR      = -6
+SUCCESS           = 1    
 """
 修订记录：
 1、2020-03-15:V1.0 ，不足：1、ToBeExec的设定不应该留在movie.py中。2、日志需要重新设定
@@ -17,69 +23,53 @@ import check
     2、新增repack的格式参数
 """
 
-#0表示测试，不执行修改，1表示执行修改
-ToBeExecDirName=1      # DirName名称
-ToBeExecJpg=1          # 海报图片
-ToBeExecRmdir=1        # 从子文件夹将内容提上来 删除空子目录
 
 def MoveDirFile(SrcDir,DestDir) :
     """
     将SrcDir所有文件移到DestDir目录中
-    以下情况会报错：
-    1、DestDir不是已经已经存在的目录
-    2、SrcDir不是一个已经存在的目录
-    3、SrcDir下还有目录
+    返回值：
+    SRC_NOT_DIR
+    DEST_NOT_DIR
+    DEPTH_ERROR
+    UNKNOWN_FILE_TYPE
+    FAILED_MOVE
+    FAILED_RMDIR
     """
-    if not os.path.isdir(SrcDir) :
-        check.ErrorLog("src isn't dir:"+SrcDir)
-        return 0
-    if not os.path.isdir(DestDir) :
-        check.ErrorLog("dest isn't dir:"+DestDir)
-        return 0
+    if not os.path.isdir(SrcDir) :  return SRC_NOT_DIR
+    if not os.path.isdir(DestDir) : return DEST_NOT_DIR
     
     NumberOfFile = 0
     FileName = []
     for file in os.listdir(SrcDir):
         FullPathFile = os.path.join(SrcDir,file)
-        if os.path.isdir(FullPathFile):
-            check.ErrorLog("+2 depth dir:"+SrcDir+"Dir:"+file)
-            return 0
+        if os.path.isdir(FullPathFile): return DEPTH_ERROR
         elif os.path.isfile(FullPathFile):
             NumberOfFile += 1
             FileName.append(FullPathFile)
-        else:
-            check.ErrorLog("error file:"+SrcDir+"file:"+file)
-            return 0
-    i = 0
+        else: return UNKNOWN_FILE_TYPE
     
-    if ToBeExecRmdir == 0:
-        check.ExecLog("mv from"+SrcDir)
-        check.ExecLog("     to"+DestDir)
-        return 1
+    #if Movie.ToBeExecRmdir == 0:
+    #    self.ExecLog("mv from"+SrcDir)
+    #    self.ExecLog("     to"+DestDir)
+    #    return 1
         
     #逐个移动文件到目标文件夹
+    i = 0
     while i < NumberOfFile :
         try:
             shutil.move(FileName[i],DestDir)
-            check.ExecLog("mv "+FileName[i]+DestDir)
             i += 1
-        except:
-            check.ErrorLog("failed Mv "+FileName[i])
-            check.ErrorLog("          "+DestDir)
-            check.DebugLog ("failed Mv "+FileName[i])
-            check.DebugLog ("          "+DestDir)
-            return 0
+        except: 
+            return FAILED_MOVE
     
     #删除这个空的srcDir
     try :
         os.rmdir(SrcDir)
-        check.ExecLog("rmdir "+SrcDir)
     except:
-        check.ErrorLog("failed rmdir"+SrcDir)
-        check.DebugLog ("failed rmdir"+SrcDir)
-        return 0
+        return FAILED_RMDIR
+
+    return SUCCESS
     
-    return 1
 #end def MoveDirFile
 
 class Movie:
@@ -87,20 +77,29 @@ class Movie:
     Count = 0
     ErrorCount = 0
     
+    #0表示测试，不执行修改，1表示执行修改
+    ToBeExecDirName = False     # DirName名称
+    ToBeExecRmdir   = False     # 从子文件夹将内容提上来 删除空子目录
+    
+    DebugLogFile=""
+    ExecLogFile=""
+    ErrorLogFile=""
+     
     def __init__(self,DirPath,DirName):
         Movie.Count += 1
         
         # 目录名称组成部分
-        self.DirName = DirName
-        self.DirPath = DirPath #确保DirPath结束符不带/
         self.Number = 0        #-1:error
         self.Copy = 0          #0表示正本，其他表示不同版本1:3D版，2:加长版
         self.Nation = ""       #
+        self.Type = 0          #0:Movie 1:TV 2:Record
         self.Name = ""         #
         self.Min = 0
         self.FormatStr = "" 
-        self.DirNameToDo = 0   #目录名称是否要修改
-        
+        self.DirName = DirName
+
+        self.DirPath = DirPath #确保DirPath结束符不带/
+        self.DirNameToDo = 0   #目录名称是否要修改        
         self.Collection = 0    #是否为合集
         self.Number2 = 0       #合集下的第二个数字
         self.SubMovie = []     #合集下的对象
@@ -108,7 +107,6 @@ class Movie:
         
         # 目录内容组成部分
         self.Jpg = 0           #是否有海报图片 
-        self.Type = 0          #0:Movie 1:TV 2:Record
         self.Nfo = 0           #是否有nfo文件
         self.NumberOfSP = 0    #花絮等的数量
         self.NumberOfVideo = 0 #不包含SP开头的视频文件，可能的几种情况
@@ -139,7 +137,23 @@ class Movie:
         self.IsError = 0       # 检查完以后是否有错误
     #end def __init__
       
- 
+    def Log(self,FileName,Str) :
+        fo = open(FileName,"a+")
+        #tCurrentTime = datetime.datetime.now()
+        #fo.write(tCurrentTime.strftime('%Y-%m-%d %H:%M:%S')+"::")
+        fo.write(Str)
+        fo.write('\n')
+        fo.close()
+    def DebugLog(self, Str):    
+        self.Log(Movie.DebugLogFile,Str)
+    def ExecLog(self,Str):
+        self.DebugLog(Str)
+        self.Log(Movie.ExecLogFile,Str)
+    def ErrorLog(self,Str):
+        print(Str)
+        self.DebugLog(Str)
+        self.Log(Movie.ErrorLogFile,Str)
+    
     def CheckDirName(self):
         """
         #检查该目录名称格式是否合法，并分解出各元素
@@ -160,23 +174,22 @@ class Movie:
        
         """
        
-        check.DebugLog ("begin checkdirname:"+self.DirName)
+        #self.DebugLog ("begin checkdirname:"+self.DirName)
         # 找出Number
         FindIndex = self.DirName.find("-")
         if FindIndex == -1 :  
-            check.ErrorLog ("Error Number:" + self.DirName +"::") 
+            self.ErrorLog ("Error Number:" + self.DirName +"::") 
             self.IsError = 1 ;  return 0
         NumberStr = self.DirName[0:FindIndex]   
         Lest = self.DirName[FindIndex+1:]       
 
         
         if not(NumberStr.isdigit())  :#不是数字的话。
-            check.ErrorLog ("invld Number1:"+self.DirName +"::"+NumberStr) 
-            check.DebugLog ("invld Number1:"+NumberStr)
+            self.ErrorLog ("invld Number1:"+self.DirName +"::"+NumberStr) 
             self.IsError = 1 ;  return 0
         self.Number = int(NumberStr)
-        check.DebugLog ("Number ="+str(self.Number))
-        check.DebugLog ("Lest ="+Lest)
+        #self.DebugLog ("Number ="+str(self.Number))
+        #self.DebugLog ("Lest ="+Lest)
         
         #加入NumberStr小于4，则需要补零，至self.DirNameToDo = 1，留给RenameDirName函数去补零
         if len(NumberStr) < 4: self.DirNameToDo = 1
@@ -184,13 +197,12 @@ class Movie:
         #继续找Nation或者Number2
         FindIndex = Lest.find("-")
         if FindIndex == -1 :  
-            check.ErrorLog ("Error Nation:" + self.DirName +"::")
-            check.DebugLog ("Error Nation:" + self.DirName +"::")
+            self.ErrorLog ("Error Nation:" + self.DirName +"::")
             self.IsError = 1 ;  return 0
         self.Nation = Lest[0:FindIndex]
         Lest = Lest[FindIndex+1:]
-        check.DebugLog ("Nation="+self.Nation)
-        check.DebugLog ("Lest="+Lest)
+        #self.DebugLog ("Nation="+self.Nation)
+        #self.DebugLog ("Lest="+Lest)
        
         
         #如果Nation是数字:
@@ -204,24 +216,24 @@ class Movie:
             elif len(self.Nation) >= 4:
                 self.Number2 = int(self.Nation)
                 if self.Number2 <= self.Number : #合集的第二个数字应该大于第一个
-                    check.ErrorLog ("Error Number2:"+self.DirName+"::"+self.Nation)
+                    self.ErrorLog ("Error Number2:"+self.DirName+"::"+self.Nation)
                     self.IsError = 1 ; return 0
                 self.Collection = 1
             else:
-                check.ErrorLog ("4- Number2:"+self.DirName+"::"+self.Nation)
+                self.ErrorLog ("4- Number2:"+self.DirName+"::"+self.Nation)
                 self.IsError = 1 ; return 0
                 
             # 继续找Nation
             FindIndex = Lest.find("-")
             if FindIndex == -1 :
-                check.ErrorLog ("Error Nation in Collection:" + self.DirName + "::" + Lest) 
+                self.ErrorLog ("Error Nation in Collection:" + self.DirName + "::" + Lest) 
                 self.IsError = 1 ; return 0
             self.Nation = Lest[0:FindIndex]
             Lest = Lest[FindIndex+1:]
             
         #判断Nation长度
         if len(self.Nation) > 5 :
-            check.ErrorLog ("5+length Nation:" + self.DirName + "::" + Lest) 
+            self.ErrorLog ("5+length Nation:" + self.DirName + "::" + Lest) 
             self.IsError = 1 ; return 0
             
         # 如果前三个字符是电视剧或者纪录片
@@ -233,7 +245,7 @@ class Movie:
             self.Type = 0
         if self.Type > 0:   #电视剧或者纪录片
             if Lest[3:4] != "-" :
-                check.ErrorLog ("Error：not - :"+self.DirName)
+                self.ErrorLog ("Error：not - :"+self.DirName)
                 self.IsError = 1 ; return 0
             Lest = Lest[4:]
             
@@ -241,42 +253,42 @@ class Movie:
         FindIndex = Lest.find(" ")
         if FindIndex == -1 :  #说明Name后面就空了，没有Min和Format
             self.Name = Lest
-            check.DebugLog ("Name:"+self.Name)
+            #self.DebugLog ("Name:"+self.Name)
             return 1    
         self.Name = Lest[0:FindIndex]
         Lest = Lest[FindIndex+1:]
-        check.DebugLog ("Name="+self.Name)
-        check.DebugLog ("Lest="+Lest)
+        #self.DebugLog ("Name="+self.Name)
+        #self.DebugLog ("Lest="+Lest)
         
         #继续找Min
         FindIndex = Lest.find("Min")
         if FindIndex == -1 :
-            check.DebugLog ("No Min:"+self.DirName)
+            #self.DebugLog ("No Min:"+self.DirName)
             self.FormatStr = Lest
             return 1
         else:
             #Min后面没有了format
             if len(Lest) == FindIndex+3 :
                 self.Min = int(Lest[0:FindIndex].lstrip())
-                check.DebugLog("no format after Min:"+self.DirName+"::"+str(self.Min))
+                #self.DebugLog("no format after Min:"+self.DirName+"::"+str(self.Min))
                 return 1
             #Min后的第一个字符是不是空格，如果不是表示Min可能是格式中的字符，例如Mind
             elif Lest[FindIndex+3:FindIndex+4] != ' ':
-                check.DebugLog ("Min之后不是空格:"+Lest[FindIndex+3:FindIndex+4]+"::"+self.DirName)
+                #self.DebugLog ("Min之后不是空格:"+Lest[FindIndex+3:FindIndex+4]+"::"+self.DirName)
                 self.FormatStr = Lest
             else :
                 MinStr = Lest[0:FindIndex].lstrip() #Min之前的字符为MinStr,并去掉左边的空格符
                 if not MinStr.isdigit() :
-                    check.ErrorLog ("Invalid Min:"+self.DirName+"::"+MinStr)
+                    self.ErrorLog ("Invalid Min:"+self.DirName+"::"+MinStr)
                     self.IsError = 1 ; return 0
                 self.Min = int(MinStr)
                 self.FormatStr = Lest[FindIndex+4:]
-                check.DebugLog ("Min="+str(self.Min))
-                check.DebugLog ("Format="+self.FormatStr)
+                #self.DebugLog ("Min="+str(self.Min))
+                #self.DebugLog ("Format="+self.FormatStr)
         
         if len(self.FormatStr) < 15:
 
-            check.ErrorLog ("15- Format:"+self.DirName+self.FormatStr)
+            self.ErrorLog ("15- Format:"+self.DirName+self.FormatStr)
             self.IsError = 1; return 0
         
         return 1
@@ -293,28 +305,28 @@ class Movie:
         '''
 
         if self.NumberOfVideo != 1 :
-            check.DebugLog ("not 1 video:"+self.DirName)
+            #self.DebugLog ("not 1 video:"+self.DirName)
             return 0
 
         if (self.VideoFileName[0])[-3:] != "mkv" :
-            check.DebugLog ("not mkvfile:"+self.DirName)
+            #self.DebugLog ("not mkvfile:"+self.DirName)
             return 0
 
         Path = os.path.join(self.DirPath,self.DirName)
         MkvName = os.path.join(Path,self.VideoFileName[0])
         RunTimeStr='mkvinfo --ui-language en_US "'+MkvName+'" | grep Duration'
-        check.DebugLog (RunTimeStr)
+        #self.DebugLog (RunTimeStr)
         Line = os.popen(RunTimeStr).read()
-        check.DebugLog (Line[:24])
+        #self.DebugLog (Line[:24])
         Hour=Line[14:16]
         Min=Line[17:19]
-        check.DebugLog (Hour+" "+Min)
+        #self.DebugLog (Hour+" "+Min)
         if not ( Hour.isdigit() and Min.isdigit() ):
-            check.DebugLog ("Hour or Min isn't digit"+Hour+":"+Min)
+            #self.DebugLog ("Hour or Min isn't digit"+Hour+":"+Min)
             return 0
 
         MinNumber = int(Hour)*60 + int(Min)
-        check.DebugLog ("Min="+str(MinNumber))
+        #self.DebugLog ("Min="+str(MinNumber))
         return MinNumber
     #End def RunTimeFromMkv 
     
@@ -329,7 +341,7 @@ class Movie:
         '''  
         
         if not self.NumberOfVideo == 1 :
-            check.DebugLog ("2+Video,don't know how to find format from video")
+            #self.DebugLog ("2+Video,don't know how to find format from video")
             return 0
         
         FileName = self.VideoFileName[0]
@@ -362,29 +374,29 @@ class Movie:
         2、否则，记录执行日志（ToDo）
         """
 
-        check.DebugLog("begin RenameDirName")
+        #self.DebugLog("begin RenameDirName")
         if self.Collection == 1 :
-            check.ErrorLog("Error:it is collection in RenameDirName:"+self.DirName)
+            self.ErrorLog("Error:it is collection in RenameDirName:"+self.DirName)
             self.IsError = 1; return 0
             
         if self.Number <= 0 or self.Number >= 10000 :
-            check.ErrorLog("ErrorNumber:"+self.DirName+"::"+self.Number)
+            self.ErrorLog("ErrorNumber:"+self.DirName+"::"+str(self.Number))
             self.IsError = 1 ; return 0
                    
         if  len(self.Nation) ==0 or len(self.Nation) >= 8 :
-            check.ErrorLog("8+Nation :"+self.DirName+"::"+self.Nation )
+            self.ErrorLog("8+Nation :"+self.DirName+"::"+self.Nation )
             self.IsError = 1; return 0
             
         if len (self.Name) == 0 or len(self.Name) >= 20 :
-            check.ErrorLog("20+Name :"+self.DirName+"::"+self.Name )
+            self.ErrorLog("20+Name :"+self.DirName+"::"+self.Name )
             self.IsError = 1; return 0
         
-        check.DebugLog (str(self.Min))
+        #self.DebugLog (str(self.Min))
         MinFromMkv = self.RunTimeFromMkv()
-        check.DebugLog (str(MinFromMkv))
+        #self.DebugLog (str(MinFromMkv))
         if self.Min == 0 and self.Type == 0:
             if MinFromMkv == 0:
-                check.ErrorLog("not Found Min:"+self.DirName)
+                self.ErrorLog("not Found Min:"+self.DirName)
                 self.IsError = 1 ; return 0
             else:
                 self.Min = MinFromMkv ; self.DirNameToDo = 1
@@ -395,23 +407,23 @@ class Movie:
             pass
             
         self.FormatStr = self.FormatStr.strip()  #去掉前后空格
-        check.DebugLog("Current formatstr;"+self.FormatStr)
+        self.DebugLog("Current formatstr;"+self.FormatStr)
         if len(self.FormatStr) == 0:
             #从video 文件名里提取出格式文件
             if self.FormatFromVideoFile() == 0:
-                check.ErrorLog("not found Format:"+self.DirName)
+                self.ErrorLog("not found Format:"+self.DirName)
                 self.IsError = 1; return 0
-            check.DebugLog("find Format:"+self.FormatStr)
+            self.DebugLog("find Format:"+self.FormatStr)
             self.DirNameToDo = 1
         elif len(self.FormatStr) <= 10:
-            check.ErrorLog("10-Format:"+self.DirName+"::"+self.FormatStr)
+            self.ErrorLog("10-Format:"+self.DirName+"::"+self.FormatStr)
             self.IsError = 1; return 0
         else:
-            check.DebugLog ("correct format"+self.FormatStr)
+            self.DebugLog ("correct format"+self.FormatStr)
         
         #如果TODO=0，说明DirName不需要修改
         if self.DirNameToDo == 0 :
-            check.DebugLog ("Correct DirName:"+self.DirName)
+            self.DebugLog ("Correct DirName:"+self.DirName)
             return 1
 
         SourceDir = os.path.join(self.DirPath,self.DirName)
@@ -426,28 +438,28 @@ class Movie:
         elif self.Type == 2:
             DestDirName = NumberStr+"-"+self.Nation+"-纪录片-"+self.Name+" "+self.FormatStr
         else:
-            check.ErrorLog("Error Type:"+self.DirName+"::"+int(self.Type))
+            self.ErrorLog("Error Type:"+self.DirName+"::"+int(self.Type))
             self.IsError = 1; return 0
             
         DestDir = os.path.join(self.DirPath,DestDirName)
         
-        check.DebugLog("begin rename dirname:")
-        if ToBeExecDirName == 1:
+        self.DebugLog("begin rename dirname:")
+        if Movie.ToBeExecDirName == True:
             try:
                 os.rename(SourceDir,DestDir)
-                check.ExecLog("mv "+self.DirName+'\n')
-                check.ExecLog("   "+DestDirName+'\n')
-                check.DebugLog ("rename success")
+                self.ExecLog("mv "+self.DirName+'\n')
+                self.ExecLog("   "+DestDirName+'\n')
+                self.DebugLog ("rename success")
                 return 1
             except:
-                check.ErrorLog("mv failed:"+self.DirName+'\n')
-                check.ErrorLog("          "+DestDirName)
-                check.DebugLog ("Mv failed:"+SourceDir)
-                check.DebugLog ("          "+DestDir)
+                self.ErrorLog("mv failed:"+self.DirName+'\n')
+                self.ErrorLog("          "+DestDirName)
+                self.DebugLog ("Mv failed:"+SourceDir)
+                self.DebugLog ("          "+DestDir)
                 self.IsError = 1 ; return 0
         else:
-            check.ExecLog("ToDo mv "+self.DirName+'\n')
-            check.ExecLog("        "+DestDirName+'\n')
+            self.ExecLog("ToDo mv "+self.DirName+'\n')
+            self.ExecLog("        "+DestDirName+'\n')
             return 1
     
     #end def RenameDirName
@@ -474,7 +486,7 @@ class Movie:
         '''
 
         if self.Collection == 1 :
-            check.ErrorLog("Error:it is collection in CheckCont:"+self.DirName)
+            self.ErrorLog("Error:it is collection in CheckCont:"+self.DirName)
             self.IsError =1; return 0
             
         NumberOfSubDir = 0
@@ -487,10 +499,10 @@ class Movie:
             FullPathFile = os.path.join(os.path.join(self.DirPath,self.DirName),File)
             if os.path.isdir(FullPathFile):
                 if File[0:2] == "SP" or File[0:3] == "srt" or File[0:4] == "info" : # 忽略掉特殊文件夹
-                    check.DebugLog ("it is SP/srt/info DIR:"+File)
+                    self.DebugLog ("it is SP/srt/info DIR:"+File)
                     continue
                 if os.path.islink(FullPathFile) :
-                    check.DebugLog ("it is a link:"+self.DirName)
+                    self.DebugLog ("it is a link:"+self.DirName)
                     continue 
                 SubDirName = FullPathFile 
                 NumberOfSubDir += 1
@@ -499,11 +511,11 @@ class Movie:
                 #视频文件
                 if File[-3:] == "avi" or File[-3:] == "mkv" or File[-2:] == "ts" or File[-3:] == "mp4" :
                     if File[0:2] == "SP" :
-                        check.DebugLog ("find SP video:"+File)
+                        self.DebugLog ("find SP video:"+File)
                         self.NumberOfSP += 1
                     elif re.search("sample",File,re.I):
-                        check.DebugLog ("find sample video:"+File)
-                        check.ErrorLog("sample video:"+File)  #仅记录，不做处理，待手工处理
+                        self.DebugLog ("find sample video:"+File)
+                        self.ErrorLog("sample video:"+File)  #仅记录，不做处理，待手工处理
                         self.SampleVideo = File 
                     else:
                         self.NumberOfVideo += 1
@@ -519,31 +531,37 @@ class Movie:
                 elif File[-3:] == "nfo" :
                     self.Nfo = 1
                 else:
-                    check.DebugLog ("other type file"+File)
+                    self.DebugLog ("other type file"+File)
             else:
-                check.ErrorLog("not file or dir :"+FullPathFile)
+                self.ErrorLog("not file or dir :"+FullPathFile)
                 self.IsError = 1; return 0
                 
         if NumberOfSubDir == 1:   #除了srt/info/SP/之外有一个子目录
             if NumberOfFile == 0 :#除了一个子目录外没有其他文件
                 SrcDir  = os.path.join(os.path.join(self.DirPath,self.DirName),SubDirName)
                 DestDir = os.path.join(self.DirPath,self.DirName)
-                if MoveDirFile(SrcDir,DestDir) == 0:
+                if Movie.ToBeExecRmdir == True :
+                    if MoveDirFile(SrcDir,DestDir) == SUCCESS:
+                        self.ExecLog("mv "+SrcDir+" "+DestDir)
+                        return self.CheckDirCont()   #已经移动文件夹成功，再重新检查
+                    else:
+                        self.ErrorLog("failed mv "+SrcDir+" "+DestDir)
+                        self.IsError = 1; return 0                       
+                else:
+                    self.ExecLog("todo mv "+SrcDir+" "+DestDir)
                     self.IsError = 1; return 0
-                if ToBeExecRmdir == 1 : #说明已经执行了Move，再重新检查一次
-                    return self.CheckDirCont()
             else:  #试图删除这个空的子目录，如果不成功，说明不是空的，报错
                 try :
                     os.rmdir(SubDirName)
-                    check.ExecLog("rmdir "+SubDirName)
+                    self.ExecLog("rmdir "+SubDirName)
                 except:
-                    check.ErrorLog("one not empty subdir:"+SubDirName)
+                    self.ErrorLog("one not empty subdir:"+SubDirName)
                     self.IsError = 1; return 0
         elif NumberOfSubDir > 1:
-            check.ErrorLog("1+ subdir:"+self.DirName)
+            self.ErrorLog("1+ subdir:"+self.DirName)
             self.IsError = 1; return 0
         else :
-            check.DebugLog ("no subdir"+self.DirName)
+            self.DebugLog ("no subdir"+self.DirName)
         
         #检查海报
         CurrentPath = os.path.join(self.DirPath,self.DirName)
@@ -553,10 +571,10 @@ class Movie:
                     SrcFileName  = os.path.join(CurrentPath,"poster.jpg")
                     DestFileName = os.path.join(CurrentPath,"cover.jpg")
                     shutil.copyfile(SrcFileName,DestFileName)
-                    check.ExecLog("cp poster.jpg cover.jpg in"+self.DirName)
+                    self.ExecLog("cp poster.jpg cover.jpg in"+self.DirName)
                     self.Jpg = 1
                 except:
-                    check.ErrorLog("failed cp poster.jpg in"+self.DirName)
+                    self.ErrorLog("failed cp poster.jpg in"+self.DirName)
                     self.IsError = 1; return 0
             else:
                 self.Jpg = 1
@@ -565,37 +583,37 @@ class Movie:
                 SrcFileName  = os.path.join(CurrentPath,"cover.jpg")
                 DestFileName = os.path.join(CurrentPath,"poster.jpg")
                 shutil.copyfile(SrcFileName,DestFileName)
-                check.ExecLog("cp cover.jpg in"+self.DirName)
+                self.ExecLog("cp cover.jpg in"+self.DirName)
                 self.Jpg = 1
             except:
-                check.ErrorLog("failed cp cover.jpg in"+self.DirName)
-                check.DebugLog("failed cp cover.jpg in"+self.DirName)
-                check.DebugLog(SrcFileName)
-                check.DebugLog (DestFileName)
+                self.ErrorLog("failed cp cover.jpg in"+self.DirName)
+                self.DebugLog("failed cp cover.jpg in"+self.DirName)
+                self.DebugLog(SrcFileName)
+                self.DebugLog (DestFileName)
                 self.IsError = 1; return 0
         elif JpgFileName != "" : #但是还有其他jpg文件
             try :
                 SrcFileName  = os.path.join(CurrentPath,JpgFileName)
                 DestFileName = os.path.join(CurrentPath,"poster.jpg")
-                check.DebugLog ("To CP:"+SrcFileName)
-                check.DebugLog ("      "+DestFileName)
+                self.DebugLog ("To CP:"+SrcFileName)
+                self.DebugLog ("      "+DestFileName)
                 shutil.copyfile(SrcFileName,DestFileName)
-                check.ExecLog("cp "+JpgFileName+" poster.jpg in"+self.DirName)
+                self.ExecLog("cp "+JpgFileName+" poster.jpg in"+self.DirName)
                 DestFileName = os.path.join(CurrentPath,"cover.jpg")
                 shutil.copyfile(SrcFileName,DestFileName)
-                check.DebugLog ("      "+DestFileName)
-                check.ExecLog("cp "+JpgFileName+" cover.jpg in"+self.DirName)
+                self.DebugLog ("      "+DestFileName)
+                self.ExecLog("cp "+JpgFileName+" cover.jpg in"+self.DirName)
                 self.Jpg = 1
             except:
-                check.ErrorLog("failed cp "+JpgFileName+" in"+self.DirName)
+                self.ErrorLog("failed cp "+JpgFileName+" in"+self.DirName)
                 self.IsError = 1; return 0
         else:
-            check.ErrorLog("no jpg file:"+self.DirName)
+            self.ErrorLog("no jpg file:"+self.DirName)
             self.Jpg = 0   #标记，但不返回，不影响后续检查操作
             
         # 检查视频文件
         if self.NumberOfVideo == 0:
-            check.ErrorLog("no video in"+self.DirName)
+            self.ErrorLog("no video in"+self.DirName)
             self.IsError = 1 ; return 0
         elif self.NumberOfVideo == 1:
             return 1
@@ -610,10 +628,10 @@ class Movie:
                 i = 1
                 while i < self.NumberOfVideo :
                     if len(self.VideoFileName[i]) != length :
-                        check.ErrorLog("diff len video:"+self.DirName)
-                        check.DebugLog ("diff len video:"+self.DirName)
-                        check.DebugLog ("  1:"+self.VideoFileName[0])
-                        check.DebugLog ("  2:"+self.VideoFileName[i])
+                        self.ErrorLog("diff len video:"+self.DirName)
+                        self.DebugLog ("diff len video:"+self.DirName)
+                        self.DebugLog ("  1:"+self.VideoFileName[0])
+                        self.DebugLog ("  2:"+self.VideoFileName[i])
                         self.NumberOfVideo = -1
                         self.IsError = 1 ; return 0
                     
@@ -629,19 +647,19 @@ class Movie:
                                 NumberOfDiff += 1
                             else :
                                 #有不同的字符，且至少有一个不是数字，报错
-                                check.ErrorLog("Diff Char Video:"+self.DirName)
-                                check.DebugLog ("diff Char video:"+self.DirName)
-                                check.DebugLog ("  1:"+self.VideoFileName[0])
-                                check.DebugLog ("  2:"+self.VideoFileName[i])  
+                                self.ErrorLog("Diff Char Video:"+self.DirName)
+                                self.DebugLog ("diff Char video:"+self.DirName)
+                                self.DebugLog ("  1:"+self.VideoFileName[0])
+                                self.DebugLog ("  2:"+self.VideoFileName[i])  
                                 self.NumberOfVideo = -1
                                 self.IsError = 1 ; return 0
                         j+=1
                     
                     if NumberOfDiff > 1:
-                        check.ErrorLog("2+ diff video:"+DirName)
-                        check.DebugLog ("2+diff video:"+DirName)
-                        check.DebugLog ("  1:"+self.VideoFileName[0])
-                        check.DebugLog ("  2:"+self.VideoFileName[i])
+                        self.ErrorLog("2+ diff video:"+DirName)
+                        self.DebugLog ("2+diff video:"+DirName)
+                        self.DebugLog ("  1:"+self.VideoFileName[0])
+                        self.DebugLog ("  2:"+self.VideoFileName[i])
                         self.NumberOfVideo = -1
                         self.IsError = 1 ; return 0
                     i+=1
@@ -651,45 +669,45 @@ class Movie:
     
     def CheckMovie(self):
         '''
-        在创建一个Movie对象后，执行检查。它将逐个调用checkDirName，CheckDirCont，RenameDirName
+        在创建一个Movie对象后，执行检查。它将逐个调用selfDirName，CheckDirCont，RenameDirName
         
         如果目录是一个合集的话，它将标记Collection，然后创建SubMovie对象，并逐个检查
         '''
         
         if self.CheckDirName() == 0 :
-            check.ErrorLog("failed CheckDirName:"+self.DirName)
+            self.ErrorLog("failed CheckDirName:"+self.DirName)
             self.IsError = 1; return 0
         
         if self.Collection == 1:
             
             Movie.Count -= 1    # 这是一个合集目录，不应该计数
             
-            check.DebugLog ("Begin Collection"+self.DirName)
+            self.DebugLog ("Begin Collection"+self.DirName)
             SubDirPath = os.path.join(self.DirPath,self.DirName)
             for File in os.listdir(SubDirPath):
                 FullPathFile = os.path.join(SubDirPath,File)
                 if os.path.isdir(FullPathFile):
                     self.SubMovie.append(Movie(SubDirPath,File))
-                    self.SubMovie[self.SubMovieCount].CheckMovie()
+                    self.SubMovie[-1].CheckMovie()
                     self.SubMovieCount += 1
-            check.DebugLog ("End Collection"+self.DirName)
+            self.DebugLog ("End Collection"+self.DirName)
             if self.SubMovieCount > 0 :
                 return 1
             else:
-                check.ErrorLog ("empty Collection:"+self.DirName)
+                self.ErrorLog ("empty Collection:"+self.DirName)
                 self.IsError = 1 ; return 0
         #end if self.Collection == 1
         
         if self.CheckDirCont() == 0 :
-            check.ErrorLog("failed CheckDirCont:"+self.DirName)
+            self.ErrorLog("failed CheckDirCont:"+self.DirName)
             self.IsError = 1; return 0
             
         if self.RenameDirName() == 0 :
-            check.ErrorLog("failed RenameDirName:"+self.DirName)
+            self.ErrorLog("failed RenameDirName:"+self.DirName)
             self.IsError = 1; return 0
         
         if self.SplitFormat() == 0:
-            check.ErrorLog("SplitFormat:"+self.DirName)
+            self.ErrorLog("SplitFormat:"+self.DirName)
             self.IsError = 1; return 0
         return 1
     #end def CheckMovie
@@ -707,7 +725,7 @@ class Movie:
         
         self.FormatStr = self.FormatStr.strip()
         if len(self.FormatStr) == 0 :
-            check.ErrorLog ("no format:"+self.DirName)
+            self.ErrorLog ("no format:"+self.DirName)
             self.IsError = 1; return 0
 
         #尝试进行空格分割
@@ -717,18 +735,25 @@ class Movie:
             #再尝试进行'.'分割
             FormatList = (self.FormatStr).split('.')
             if len(FormatList) < 3:
-                check.ErrorLog("3- format:"+self.FormatStr)
+                self.ErrorLog("3- format:"+self.FormatStr)
                 self.IsError = 1; return 0
             #else :
             #SplitSign = '.'
 
+        #处理最后一个group，通常是XXX-Group格式
+        tStr = FormatList[-1]
+        tIndex = tStr.rfind('-')
+        if tIndex > 0:
+            FormatList[-1] = tStr[:tIndex]
+            self.ZipGroup = tStr[tIndex+1:]
+        
         NumberOfElement=0  #找到了几个关键字
         LastIndex = -1     #找到关键字后要标记出它在FormatList中的索引
         FormatSign = []    #对应FormatList[]的标志位，0表示未识别，1表示已识别
         #beginfrom 1,0 must be englishname
         i=1 ; FormatSign.append(0)
         while i < len(FormatList) :
-            check.DebugLog ("FormatList:i="+str(i)+"::"+FormatList[i])
+            self.DebugLog ("FormatList:i="+str(i)+"::"+FormatList[i])
             TempStr = FormatList[i].lower()
             TempStr = TempStr.replace(' ','')  #删除空格并把它全部转换为小写，便于比较
             FormatSign.append(0)
@@ -737,49 +762,71 @@ class Movie:
             if (TempStr.isdigit() and int(TempStr) > 1900 and int(TempStr) <= int(datetime.datetime.now().year)):
                 NumberOfElement += 1 ; LastIndex = i ; FormatSign[i] = 1
                 self.Year = int(FormatList[i])
-                check.DebugLog ("find Year:"+str(self.Year)+"i="+str(i))
+                self.DebugLog ("find Year:"+str(self.Year)+"i="+str(i))
             #版本
             elif TempStr == "cc" or \
                  TempStr == "dc" or \
                  TempStr == "extended" or \
                  TempStr == "open-matte" or \
-                 TempStr == "the-final-cut" :
+                 TempStr == "the-final-cut" or\
+                 TempStr == "uncut" or\
+                 TempStr == "unrated" or \
+                 TempStr == "complete" or\
+                 TempStr == "cut":
                 NumberOfElement += 1 ; LastIndex = i ; FormatSign[i] = 1
-                self.Version = FormatList[i]
-                check.DebugLog ("find Version:"+self.Version+"i="+str(i))
+                if self.Version == "": self.Version = FormatList[i]
+                else:                  self.Version += '-'+FormatList[i]
+                self.DebugLog ("find Version:"+self.Version+"i="+str(i))
             #国家版本
             elif TempStr.upper() == "JPN" or \
                  TempStr.upper() == "GBR" or \
-                 TempStr.upper() == "FRA":
+                 TempStr.upper() == "KOR" or \
+                 TempStr.upper() == "USA" or \
+                 TempStr.upper() == "FRA" or \
+                 TempStr.upper() == "TW" or \
+                 TempStr.upper() == "HK":
                 NumberOfElement += 1 ; LastIndex = i ; FormatSign[i] = 1
                 self.NationVersion = FormatList[i]
-                check.DebugLog ("find NationVersion:"+self.NationVersion+"i="+str(i))
+                self.DebugLog ("find NationVersion:"+self.NationVersion+"i="+str(i))
             #特别说明，例如rerip
             elif TempStr == "rerip" or TempStr == "repack":
                 NumberOfElement += 1 ; LastIndex = i ; FormatSign[i] = 1
                 self.Special = FormatList[i]
-                check.DebugLog ("find Special:"+self.Special+"i="+str(i))
+                self.DebugLog ("find Special:"+self.Special+"i="+str(i))
             #分辨率
             elif TempStr == "720p" or \
                  TempStr == "1080p" or \
                  TempStr == "2160p" or \
-                 TempStr == "1080i" :
+                 TempStr == "1080i" or \
+                 re.match("[0-9][0-9][0-9][0-9]x[0-9][0-9][0-9]p",TempStr) is not None or \
+                 re.match("[0-9][0-9][0-9][0-9]x[0-9][0-9][0-9][0-9]p",TempStr) is not None:
                 NumberOfElement += 1 ; LastIndex = i ; FormatSign[i] = 1
                 self.Radio = FormatList[i]
-                check.DebugLog ("find Radio:"+self.Radio+"i="+str(i))
+                self.DebugLog ("find Radio:"+self.Radio+"i="+str(i))
+            #ignore 2d
+            elif TempStr == "2d":   
+                NumberOfElement += 1 ; LastIndex = i ; FormatSign[i] = 1
+                self.DebugLog ("ignore 2d:"+"i="+str(i))
             #来源
             elif TempStr == "bluray" or \
                  TempStr == "blu-ray" or \
+                 TempStr == "uhd" or \
+                 TempStr == "3d" or\
+                 TempStr == "sbs" or\
+                 TempStr == "nf" or\
                  TempStr == "web-dl" or \
                  TempStr == "hdtv" :
                 NumberOfElement += 1 ; LastIndex = i ; FormatSign[i] = 1
-                self.Source = FormatList[i]
-                check.DebugLog ("find Source:"+self.Source+"i="+str(i))
+                if self.Source == "": self.Source = FormatList[i]
+                else:                 self.Source += '-'+FormatList[i]
+                self.DebugLog ("find Source:"+self.Source+"i="+str(i))
             #压缩算法
-            elif TempStr == "x265.10bit" :
+            elif TempStr == "x265.10bit" or \
+                 TempStr == "x265 10bit" or \
+                 TempStr == "x265-10bit" :
                 NumberOfElement += 2 ; LastIndex = i ; FormatSign[i] = 1
                 self.Compress = "x265" ; self.Bit = "10bit"
-                check.DebugLog ("find Compress and bit：x265.10bit")
+                self.DebugLog ("find Compress and bit：x265.10bit")
             elif TempStr == "x264" or \
                  TempStr == "h264" or \
                  TempStr == "x265" or \
@@ -788,21 +835,25 @@ class Movie:
                  TempStr == "hevc" :
                 NumberOfElement += 1 ; LastIndex = i ; FormatSign[i] = 1
                 self.Compress = FormatList[i]
-                check.DebugLog ("find Compress:"+self.Compress+"i="+str(i))
+                self.DebugLog ("find Compress:"+self.Compress+"i="+str(i))
             #音频格式
             elif TempStr[0:3] == "dts" or \
+                 TempStr[0:6] == "dts-hd" or \
+                 TempStr[0:5] == "dtshd" or\
                  TempStr[0:3] == "ac3" or \
                  TempStr[0:3] == "aac" or \
                  TempStr[0:3] == "dd2" or \
                  TempStr[0:3] == "dd5" or \
+                 TempStr[0:3] == "dda" or \
                  TempStr[0:3] == "ddp" or \
+                 TempStr[0:4] == "lpcm" or \
                  TempStr[0:5] == "atmos" or \
                  TempStr[0:6] == "truehd" or \
                  TempStr[0:7] == "true-hd" or \
                  TempStr == "dd" :     
                 NumberOfElement += 1 ; LastIndex = i ; FormatSign[i] = 1
-                self.Audio = FormatList[i]
-                check.DebugLog ("find audio:"+self.Audio+"i="+str(i))
+                self.Audio += FormatList[i]
+                self.DebugLog ("find audio:"+self.Audio+"i="+str(i))
                 
                 #音频格式比较复杂，后面可能还有信息被分割成下一个组了
                 #所以，需要继续识别后面的组元素是否要加入音频格式
@@ -811,7 +862,9 @@ class Movie:
                     TempStr2 = (FormatList[i+1]).replace(' ','')   #去掉空格
                     TempStr2 = TempStr2.replace('.','')            #去掉'.'号
                     if TempStr2 == 'MA' or \
+                       TempStr2 == 'MA5' or \
                        TempStr2 == 'MA51' or \
+                       TempStr2 == 'MA7' or \
                        TempStr2 == 'MA71' or \
                        TempStr2 == 'MA20' or \
                        TempStr2 == '20' or \
@@ -821,32 +874,42 @@ class Movie:
                        TempStr2 == '1' or \
                        TempStr2 == '2' or \
                        TempStr2 == '5' or \
+                       TempStr2 == '6' or \
                        TempStr2 == '7' :
                         i += 1; LastIndex = i; FormatSign.append(1)
                         self.Audio += FormatList[i]
                     else : #只要有一个不满足条件就跳出循环
                         break
-                check.DebugLog ("find Audio-end："+self.Audio)
+                self.DebugLog ("find Audio-end："+self.Audio)
             #音轨，如2Audio
             elif TempStr[1:6] == "audio" :
                 NumberOfElement += 1 ; LastIndex = i ; FormatSign[i] = 1
                 self.Track = FormatList[i]
-                check.DebugLog ("find Track"+self.Track+"i="+str(i))
+                self.DebugLog ("find Track"+self.Track+"i="+str(i))
             #色彩精度，10bit
             elif TempStr == "10bit" or TempStr == "8bit" :
                 NumberOfElement += 1 ; LastIndex = i ; FormatSign[i] = 1
                 self.Bit = FormatList[i]
-                check.DebugLog ("find bit ："+self.Bit+"i="+str(i))
-            elif TempStr == "hdr" :
+                self.DebugLog ("find bit ："+self.Bit+"i="+str(i))
+            elif TempStr == "hdr" or\
+                 TempStr == "hdr10" or\
+                 TempStr == "hdrplus" or\
+                 TempStr == "hdr10plus":
                 NumberOfElement += 1 ; LastIndex = i ; FormatSign[i] = 1
-                self.HDR = 1
-                check.DebugLog ("find hdr"+"i="+str(i))
+                self.HDR = FormatList[i]
+                self.DebugLog ("find hdr"+"i="+str(i))
+            elif TempStr == "mnhd" or\
+                 TempStr == "muhd" :
+                NumberOfElement += 1 ; LastIndex = i ; FormatSign[i] = 1
+                if self.ZipGroup == "" : self.ZipGroup = FormatList[i]
+                else :                   self.ZipGroup = FormatList[i]+'-'+self.ZipGroup
+                self.DebugLog ("ZipGroup:"+self.ZipGroup+" i="+str(i))
             else :
                 pass 
             
             if NumberOfElement == 1 and self.EnglishName == "": #第一次识别出关键字，那么之前的就是片名了        
                 if i == 0: #第一个分割字符就是关键字，说明没有找到片名
-                    check.ErrorLog("no name:"+self.DirName)
+                    self.ErrorLog("no name:"+self.DirName)
                     self.IsError = 1; return 0
                 j=0
                 while j < i:
@@ -855,28 +918,25 @@ class Movie:
                     self.EnglishName += FormatList[j]
                     FormatSign[j] = 1
                     j += 1   
-                check.DebugLog ("name="+self.EnglishName)
+                self.DebugLog ("name="+self.EnglishName)
             i += 1
             
         #end while i < len(FormatList)
         
-        #识别出的最后关键字，后面都是压缩组
+        #识别出的最后关键字为压缩组
         i=LastIndex+1
         while i < len(FormatSign) :
-            #不是第一个元素的话，前面加分隔符.
-            if i != LastIndex+1 : 
-                self.ZipGroup += '.'
-            
-            self.ZipGroup += FormatList[i]
+            if self.ZipGroup == "": self.ZipGroup = FormatList[i]
+            else :                 self.ZipGroup = FormatList[i]+'-'+self.ZipGroup
             FormatSign[i] = 1
             i += 1
-        check.DebugLog ("Group="+self.ZipGroup)
+        self.DebugLog ("Group="+self.ZipGroup)
         
         #找出所有未识别的元素
         i = 0 ; Error = 0
         while i < len(FormatSign) :
             if FormatSign[i] == 0:
-                check.DebugLog ("unknown word:"+FormatList[i])
+                self.DebugLog ("unknown word:"+FormatList[i])
                 Error = 1
             i += 1
             
@@ -894,11 +954,11 @@ class Movie:
         if self.Source != ""      : String += self.Source +"."
         if self.Compress != ""    : String += self.Compress+"."
         if self.Bit != ""         : String += self.Bit+"."
-        if self.HDR != 0          : String += "10Bit."
+        if self.HDR !=  ""        : String += self.HDR+"."
         if self.Audio != ""       : String += self.Audio+"."
         if self.Track != ""       : String += self.Track+"."
         if self.ZipGroup != ""    : String += self.ZipGroup
-        check.DebugLog("new format:"+String)
+        self.DebugLog("new format:"+String)
         #self.FormatStr = String
         return 1
     #end def SplitFormat()
