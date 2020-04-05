@@ -10,6 +10,7 @@ from pathlib import Path
 import datetime
 import qbittorrentapi 
 import transmissionrpc
+import psutil
  
 """
 一、读取备份种子数据，建立种子列表
@@ -43,6 +44,8 @@ V3 ：
     1、增加MoveTorrents，从QB状态为停止，分类为“保种”的种子转移到TR进行做种
     2、修订checkdisk的入口
     
+五、V4
+1、增加QB的内存泄露功能，当内存占用超过95%后，重启QB
 
 """
 
@@ -55,17 +58,17 @@ ErrorLogFile = "log/error1.log"             #错误日志
 #TR/QB的连接设置    
 TR_IP = "localhost"
 TR_PORT = 9091
-TR_USER = ''
-TR_PWD  = ''
+TR_USER = 'dummy'
+TR_PWD  = 'moonbeam'
 QB_IPPORT = 'localhost:8989'
 QB_USER = 'admin'
-QB_PWD =  ''
+QB_PWD =  'moonbeam'
 
 #连续NUMBEROFDAYS上传低于UPLOADTHRESHOLD，并且类别不属于'保种'的种子，会自动停止。
 #QB：把保种的种子分类设为"保种"，就不会停止
 #TR：因为不支持分类，通过制定文件夹方式来判断，如果保存路径在TRSeedFolderList中，认为属于“保种”
 NUMBEROFDAYS = 3                           #连续多少天低于阈值
-UPLOADTHRESHOLD = 100000000                 #阈值，单位Bytes
+UPLOADTHRESHOLD = 10000000                 #阈值，单位Bytes
 ToBePath = "/media/root/BT/tobe/"           #低上传的种子把文件夹移到该目录待处理
 #TR的保种路径，保存路径属于这个列表的就认为是保种,，如果类别为保种的话，就不会检查是否属于lowupload
 TRSeedFolderList = ["/media/root/BT/keep" ,"/root/e52/books"]
@@ -245,20 +248,20 @@ class TorrentInfo :
                 if self.Client == QB and (self.Category ==  '保种' or self.Category == '转移') : pass
                 elif  self.Client == TR and (self.Category == '保种' or IsSubDir(self.SavedPath,TRSeedFolderList)) : pass
                 else :
-                    #DebugLog("check torrent file:"+self.Name+"::"+self.SavedPath)
+                    DebugLog("check torrent file:"+self.Name+"::"+self.SavedPath)
                     tFullFileName = os.path.join(self.SavedPath, self.FileName[0]['Name'])
                     if not os.path.isfile(tFullFileName) :
                         ErrorLog(tFullFileName+" does not exist")
 
         if self.Status == STOP and self.Category == '低上传':
             tFullPath = os.path.join(self.RootFolder,self.DirName)
-            try:
-                shutil.move(tFullPath, ToBePath)
-            except:
-                ErrorLog("failed mv dir :"+tFullPath)
-            else:
-                DebugLog("lowupload, so mv dir "+tFullPath)
-            #DebugLog("lowupload, so mv dir "+tFullPath)
+            #try:
+            #    shutil.move(tFullPath, ToBePath)
+            #except:
+            #    ErrorLog("failed mv dir :"+tFullPath)
+            #else:
+            #    DebugLog("lowupload, so mv dir "+tFullPath)
+            DebugLog("lowupload, so mv dir "+tFullPath)
         #更新TorrentList        
         #首先找该种子是否存在
         tNoOfTheList = FindTorrent(self.Client,self.HASH)
@@ -925,6 +928,42 @@ def MoveTorrents():
     return tNumber
 #end def MoveTorrents    
     
+def StopQB():
+
+    try:
+        qb_client = qbittorrentapi.Client(host=QB_IPPORT, username=QB_USER, password=QB_PWD)            
+        qb_client.auth_log_in()
+        qb_client.torrents.pause.all()
+        qb_client.app_shutdown()
+    except:
+        DebugLog("failed to stop QB")
+        return False
+    else:
+        DebugLog("success to stop QB")
+        return True
+        
+def SartQB():
+
+    if os.system("/usr/bin/qbittorrent &") == 0 : DebugLog ("success start qb")
+    else : debugLog("failed to start qb"); return False
+    
+    time.sleep(10)
+    try:
+        qb_client = qbittorrentapi.Client(host=QB_IPPORT, username=QB_USER, password=QB_PWD)
+        qb_client.auth_log_in()
+        torrents = qb_client.torrents.info()
+    except:
+        debugLog("failed to resume qb torrents")
+        return False
+        
+    for torrent in torrents:
+        if torrent.category == '下载' or torrent.category == '刷上传' or torrent.category == '保种' : 
+            try:
+                torrent.resume()
+            except:
+                DebugLog("failed to resume:"+torrent.name)
+    return True
+    
 if __name__ == '__main__' :
 
     tCurrentTime = datetime.datetime.now()
@@ -979,6 +1018,14 @@ if __name__ == '__main__' :
         #写入TRCategory
         if gTRCategoryUpdate == True : WriteTRCategory()
         
+        #检查一下内存占用
+        tMem = psutil.virtual_memory()
+        DebugLog("memory percent used:"+str(tMem.percent))
+        if tMem.percent >= 95: 
+            if StopQB() == True :
+                time.sleep(600)
+                SartQB()
+                
         gLastCheckDate = tCurrentTime.strftime("%Y-%m-%d")
         DebugLog("update gLastCheckDate="+gLastCheckDate)        
         DebugLog("begin sleep")
