@@ -46,14 +46,15 @@ V3 ：
     
 五、V4
 1、增加QB的内存泄露功能，当内存占用超过95%后，重启QB
-
+六、V4.1
+1、增加一个各个网站的下载量统计
 """
 
  
 #运行设置############################################################################
 #日志文件
-DebugLogFile = "log/debug1.log"             #日志，可以是相对路径，也可以是绝对路径
-ErrorLogFile = "log/error1.log"             #错误日志
+DebugLogFile = "log/debug2.log"             #日志，可以是相对路径，也可以是绝对路径
+ErrorLogFile = "log/error2.log"             #错误日志
 
 #TR/QB的连接设置    
 TR_IP = "localhost"
@@ -68,7 +69,7 @@ QB_PWD =  'moonbeam'
 #QB：把保种的种子分类设为"保种"，就不会停止
 #TR：因为不支持分类，通过制定文件夹方式来判断，如果保存路径在TRSeedFolderList中，认为属于“保种”
 NUMBEROFDAYS = 3                           #连续多少天低于阈值
-UPLOADTHRESHOLD = 10000000                 #阈值，单位Bytes
+UPLOADTHRESHOLD = 200000000                 #阈值，单位Bytes
 ToBePath = "/media/root/BT/tobe/"           #低上传的种子把文件夹移到该目录待处理
 #TR的保种路径，保存路径属于这个列表的就认为是保种,，如果类别为保种的话，就不会检查是否属于lowupload
 TRSeedFolderList = ["/media/root/BT/keep" ,"/root/e52/books"]
@@ -87,14 +88,27 @@ TorrentListBackup = "data/pt.txt"  #种子信息备份目录（重要的是每�
 
 #配置自己要检查的磁盘/保存路径，看下面是否有文件夹/文件已经不在种子列表，这样就可以转移或者删除了。
 CheckDiskList = [ "/media/root/wd4t","/media/root/BT/movies"]
-#如果有一些文件夹/文件不想总是被检查，可以见一个忽略清单
+#如果有一些文件夹/文件不想总是被检查，可以建一个忽略清单
 IgnoreListFile = "data/ignore.txt"
 
 #从QB转移到TR做种：定期检查QB状态为停止且分类为‘保种’的会转移到TR做种，转移成功后，QB种子分类会设置为'转移'
 #QB的备份目录BT_backup，我的运行环境目录如下，如有不同请搜索qbittorrent在不同OS下的配置
 QBBackupDir = "/root/.local/share/data/qBittorrent/BT_backup"
 #转移做种以后，把种子文件和快速恢复文件转移到QBTorrentsBackupDir目录进行保存，以备需要
-QBTorrentsBackupDir = "data/qb_backup"                        
+QBTorrentsBackupDir = "data/qb_backup"   
+
+FRDSDataList   = []
+MTeamDataList  = []
+HDHomeDataList = []
+BeiTaiDataList = []
+JoyHDDataList  = []
+SoulVoiceDataList = []
+PTHomeDataList = []
+PTSBaoDataList = []
+LeagueHDDataList = []
+HDAreaDataList = []
+AVGVDataList   = []
+TrackerListBackup = "data/tracker.txt"               
 #运行设置结束#################################################################################
 
 #程序易读性用，请勿修改
@@ -173,7 +187,7 @@ def IsSubDir(SrcDir,DestDirList):
 
 
 class TorrentInfo :
-    def __init__(self,Client,HASH,Name,Done,Status,Category,Tags,SavedPath,AddDateTime,DateData):
+    def __init__(self,Client,HASH,Name,Done,Status,Category,Tags,SavedPath,AddDateTime,DateData,Tracker=""):
         
         self.Client = Client          #"TR" "QB" 
         self.HASH = HASH              #HASH
@@ -192,8 +206,9 @@ class TorrentInfo :
                                       #例如:['Date':2020-03-10,'Data':100,'Date':2020-03-11,'Data':200]
                                       #Data:，int类型，新的一天第一次数据，绝对数。单位M
                                       #正常运行时应该是每一天一条数据，而且是日期是连续的。但如果程序退出并保存数据后，很长时间再重新启动，就会出现日期不连续
-                                      #这个时候会有误差，忽略不计吧                                  
-
+                                      #这个时候会有误差，忽略不计吧
+        self.Tracker = Tracker
+        
         self.FileName = []            #存储文件的数组
                                       #名字,大小，完成率
         self.DirName = ""             #种子目录名称
@@ -245,23 +260,25 @@ class TorrentInfo :
                         return CHECKERROR
                     i+=1
             else:
-                if self.Client == QB and (self.Category ==  '保种' or self.Category == '转移') : pass
-                elif  self.Client == TR and (self.Category == '保种' or IsSubDir(self.SavedPath,TRSeedFolderList)) : pass
+                if self.Client == QB and (self.Category ==  '保种' or self.Category == '转移' or self.Category == '低上传') : pass
+                elif  self.Client == TR and (self.Category == '保种' or IsSubDir(self.SavedPath,TRSeedFolderList) or self.Category == '低上传') : pass
                 else :
-                    DebugLog("check torrent file:"+self.Name+"::"+self.SavedPath)
+                    #DebugLog("check torrent file:"+self.Name+"::"+self.SavedPath)
                     tFullFileName = os.path.join(self.SavedPath, self.FileName[0]['Name'])
                     if not os.path.isfile(tFullFileName) :
                         ErrorLog(tFullFileName+" does not exist")
 
         if self.Status == STOP and self.Category == '低上传':
             tFullPath = os.path.join(self.RootFolder,self.DirName)
-            #try:
-            #    shutil.move(tFullPath, ToBePath)
-            #except:
-            #    ErrorLog("failed mv dir :"+tFullPath)
-            #else:
-            #    DebugLog("lowupload, so mv dir "+tFullPath)
-            DebugLog("lowupload, so mv dir "+tFullPath)
+            if os.path.exists(tFullPath):
+                DebugLog(tFullPath+" exists, begin mv to "+ToBePath)
+                try:
+                    shutil.move(tFullPath, ToBePath)
+                except:
+                    ErrorLog("failed mv dir :"+tFullPath)
+                else:
+                    DebugLog("lowupload, so mv dir "+tFullPath)
+            #DebugLog("lowupload, so mv dir "+tFullPath)
         #更新TorrentList        
         #首先找该种子是否存在
         tNoOfTheList = FindTorrent(self.Client,self.HASH)
@@ -283,6 +300,7 @@ class TorrentInfo :
         if gTorrentList[tNoOfTheList].RootFolder  != self.RootFolder : gTorrentList[tNoOfTheList].RootFolder  = self.RootFolder ; tUpdate += 1
         if gTorrentList[tNoOfTheList].DirName     != self.DirName    : gTorrentList[tNoOfTheList].DirName     = self.DirName    ; tUpdate += 1
         if gTorrentList[tNoOfTheList].FileName    != self.FileName   : gTorrentList[tNoOfTheList].FileName    = self.FileName   ; tUpdate += 1
+        if gTorrentList[tNoOfTheList].Tracker     != self.Tracker    : gTorrentList[tNoOfTheList].Tracker     = self.Tracker    ; tUpdate += 1
 
         """tUpdate = 0
         if gTorrentList[tNoOfTheList].Name        != self.Name       : gTorrentList[tNoOfTheList].Name        = self.Name       ; tUpdate += 1;DebugLog("name change,old="+gTorrentList[tNoOfTheList].Name+"::now="+self.Name)
@@ -432,6 +450,7 @@ def TransformTorrent(Client,torrent):
         Tags = ""
         SavedPath = torrent.downloadDir
         AddDateTime = time.strftime( '%Y-%m-%d %H:%M:%S', time.localtime(torrent.addedDate) ) 
+        Tracker = torrent.trackers[0]['announce']
         DateData = [] ;  DateData.append({'Date':gToday,'Data':torrent.uploadedEver})  
     else :
         HASH = torrent.hash
@@ -443,9 +462,10 @@ def TransformTorrent(Client,torrent):
         Tags = torrent.tags
         SavedPath = torrent.save_path
         AddDateTime = time.strftime( '%Y-%m-%d %H:%M:%S', time.localtime(torrent.added_on) ) 
+        Tracker = torrent.tracker
         DateData = [] ;  DateData.append({'Date':gToday,'Data':torrent.uploaded})   
 
-    return  TorrentInfo(Client,HASH,Name,Done,Status,Category,Tags,SavedPath,AddDateTime,DateData)
+    return  TorrentInfo(Client,HASH,Name,Done,Status,Category,Tags,SavedPath,AddDateTime,DateData,Tracker)
     
 def IsLowUpload(DateData):
     """
@@ -944,7 +964,7 @@ def StopQB():
         
 def SartQB():
 
-    if os.system("/usr/bin/qbittorrent &") == 0 : DebugLog ("success start qb")
+    if os.system("/usr/bin/qbittorrent &") == 0 : DebugLog ("success to start qb")
     else : debugLog("failed to start qb"); return False
     
     time.sleep(10)
@@ -964,6 +984,203 @@ def SartQB():
                 DebugLog("failed to resume:"+torrent.name)
     return True
     
+def TrackerData():
+
+    tFRDSData = 0
+    tMTeamData = 0
+    tHDHomeData = 0
+    tBeiTaiData = 0
+    tJoyHDData = 0
+    tSoulVoiceData = 0
+    tPTHomeData = 0
+    tPTSBaoData = 0
+    tLeagueHDData = 0
+    tHDAreaData = 0
+    tAVGVData  = 0    
+    i = 0
+    while i < len(gTorrentList):
+        if len(gTorrentList[i].DateData) == 0 : ErrorLog("datedata is null:"+gTorrentList[i].HASH); i+=1; continue
+        elif len(gTorrentList[i].DateData) == 1 :
+            tData = gTorrentList[i].DateData[0]['Data']
+        else:
+            tData = gTorrentList[i].DateData[-1]['Data']-gTorrentList[i].DateData[-2]['Data']
+    
+        Tracker = gTorrentList[i].Tracker
+        if   Tracker.find("frds") >= 0:        tFRDSData += tData
+        elif Tracker.find("m-team") >= 0:      tMTeamData += tData
+        elif Tracker.find("hdhome") >= 0:     tHDHomeData += tData
+        elif Tracker.find("beitai") >= 0:     tBeiTaiData += tData
+        elif Tracker.find("joyhd")  >= 0:     tJoyHDData += tData
+        elif Tracker.find("soulvoice") >= 0:  tSoulVoiceData += tData
+        elif Tracker.find("pthome") >= 0:     tPTHomeData += tData
+        elif Tracker.find("ptsbao") >= 0:     tPTSBaoData += tData
+        elif Tracker.find("leaguehd") >= 0:   tLeagueHDData += tData
+        elif Tracker.find("hdarea") >= 0:     tHDAreaData += tData
+        elif Tracker.find("avgv") >= 0:       tAVGVData += tData
+        else: ErrorLog("unknown tracker:"+gTorrentList[i].HASH); i+=1; continue
+        i += 1
+        
+    FRDSDataList.append({'Date':gToday,'Data':tFRDSData})
+    MTeamDataList.append({'Date':gToday,'Data':tMTeamData})
+    HDHomeDataList.append({'Date':gToday,'Data':tHDHomeData})
+    BeiTaiDataList.append({'Date':gToday,'Data':tBeiTaiData})
+    JoyHDDataList.append({'Date':gToday,'Data':tJoyHDData})
+    SoulVoiceDataList.append({'Date':gToday,'Data':tSoulVoiceData})
+    PTHomeDataList.append({'Date':gToday,'Data':tPTHomeData})
+    PTSBaoDataList.append({'Date':gToday,'Data':tPTSBaoData})
+    LeagueHDDataList.append({'Date':gToday,'Data':tLeagueHDData})
+    HDAreaDataList.append({'Date':gToday,'Data':tHDAreaData})
+    AVGVDataList.append({'Date':gToday,'Data':tAVGVData})
+    if len(FRDSDataList) > 30: del FRDSDataList[0]
+    if len(MTeamDataList) > 30: del MTeamDataList[0]
+    if len(HDHomeDataList) > 30: del HDHomeDataList[0]
+    if len(BeiTaiDataList) > 30: del BeiTaiDataList[0]
+    if len(JoyHDDataList) > 30: del JoyHDDataList[0]
+    if len(SoulVoiceDataList) > 30: del SoulVoiceDataList[0]
+    if len(PTHomeDataList) > 30: del PTHomeDataList[0]
+    if len(PTSBaoDataList) > 30: del PTSBaoDataList[0]
+    if len(LeagueHDDataList) > 30: del LeagueHDDataList[0]
+    if len(HDAreaDataList) > 30: del HDAreaDataList[0]
+    if len(AVGVDataList) > 30: del AVGVDataList[0]
+    
+    DebugLog("FRDS      upload(M):"+str(tFRDSData/(1000*1000)))
+    DebugLog("MTeam     upload(M):"+str(tMTeamData/(1000*1000)))
+    DebugLog("HDHome    upload(M):"+str(tHDHomeData/(1000*1000)))
+    DebugLog("BeiTai    upload(M):"+str(tBeiTaiData/(1000*1000)))
+    DebugLog("JoyHD     upload(M):"+str(tJoyHDData/(1000*1000)))
+    DebugLog("SoulVoice upload(M):"+str(tSoulVoiceData/(1000*1000)))
+    DebugLog("PTHome    upload(M):"+str(tPTHomeData/(1000*1000)))
+    DebugLog("PTSBao    upload(M):"+str(tPTSBaoData/(1000*1000)))
+    DebugLog("LeagueHD  upload(M):"+str(tLeagueHDData/(1000*1000)))
+    DebugLog("HDArea    upload(M):"+str(tHDAreaData/(1000*1000)))
+    DebugLog("AVGV      upload(M):"+str(tAVGVData/(1000*1000)))
+
+    DebugLog("FRDS      "+GetDaysOfNoUpload(FRDSDataList)+" days no upload")
+    DebugLog("MTeam     "+GetDaysOfNoUpload(MTeamDataList)+" days no upload")
+    DebugLog("HDHome    "+GetDaysOfNoUpload(HDHomeDataList)+" days no upload")
+    DebugLog("BeiTai    "+GetDaysOfNoUpload(BeiTaiDataList)+" days no upload")
+    DebugLog("JoyHD     "+GetDaysOfNoUpload(JoyHDDataList)+" days no upload")
+    DebugLog("SoulVoice "+GetDaysOfNoUpload(SoulVoiceDataList)+" days no upload")
+    DebugLog("PTHome    "+GetDaysOfNoUpload(PTHomeDataList)+" days no upload")
+    DebugLog("PTSBao    "+GetDaysOfNoUpload(PTSBaoDataList)+" days no upload")
+    DebugLog("LeagueHD  "+GetDaysOfNoUpload(LeagueHDDataList)+" days no upload")
+    DebugLog("HDArea    "+GetDaysOfNoUpload(HDAreaDataList)+" days no upload")
+    DebugLog("AVGV      "+GetDaysOfNoUpload(AVGVDataList)+" days no upload")
+    
+    return 1
+    
+def ReadTrackerBackup():
+    """
+    读取TrackerList的备份文件，用于各个Tracker的上传数据
+    """
+    
+    #
+    if not os.path.isfile(TrackerListBackup):
+        DebugLog(TrackerListBackup+" does not exist")
+        return 0
+        
+    for line in open(TrackerListBackup):
+        Tracker,tDateDataStr = line.split('|',1)
+        if tDateDataStr [-1:] == '\n' :  tDateDataStr = tDateDataStr[:-1]  #remove '\n'
+        tDateDataList = tDateDataStr.split(',')
+
+        i = 0 ; DateData = []
+        while i < len(tDateDataList) :
+            if tDateDataList[i] == "" :  break      #最后一个可能为空就退出循环
+            tDate = (tDateDataList[i])[:10]
+            tData = int( (tDateDataList[i])[11:] )
+            DateData.append({'Date':tDate,'Data':tData})
+            i += 1
+        
+        if   Tracker == "FRDS": FRDSDataList = DateData
+        elif Tracker == "MTeam": MTeamDataList = DateData
+        elif Tracker == "HDHome": HDHomeDataList = DateData
+        elif Tracker == "BeiTai": BeiTaiDataList = DateData
+        elif Tracker == "JoyHD": JoyHDDataList = DateData
+        elif Tracker == "SoulVoice": SoulVoiceDataList = DateData
+        elif Tracker == "PTHome": PTHomeDataList = DateData
+        elif Tracker == "PTSBao": PTSBaoDataList = DateData
+        elif Tracker == "LeagueHD": LeagueHDDataList = DateData
+        elif Tracker == "HDArea": HDAreaDataList = DateData
+        elif Tracker == "AVGV": AVGVDataList = DateData
+        else :  ErrorLog("unknown track in TrackBackup:"+Tracker) 
+        
+    #end for 
+    return 1
+
+def GetDateDataStr(tTrackerList):
+
+    j = 0 ; tDateDataListStr = ""
+    while j < len(tTrackerList):        
+        tDateDataStr = tTrackerList[j]['Date']+":" + str(tTrackerList[j]['Data'])
+        tDateDataListStr += tDateDataStr+','
+        j += 1
+    if tDateDataListStr[-1:] == ',' : tDateDataListStr = tDateDataListStr[:-1] #去掉最后一个','
+        
+    return tDateDataListStr  
+
+def GetDaysOfNoUpload(tTrackerList):
+    i=len(tTrackerList)-1
+    NumberOfDays=0
+    while i >= 0 :
+        if tTrackerList[i]['Data'] == 0:
+            NumberOfDays += 1
+        else:
+            break
+    return str(NumberOfDays).zfill(2)
+
+def WriteTrackerBackup():
+    """
+ 
+    """
+
+    if gIsNewDay == True :
+        tThisMonth = gToday[0:7] ; tThisYear = gToday[0:4]
+        if tThisMonth[5:7] == "01" : 
+            tLastMonth = str(int(tThisYear)-1)+"-"+"12"      
+        else : 
+            tLastMonth = tThisYear+"-"+str(int(tThisMonth[5:7])-1).zfill(2)
+        
+        tFileName = os.path.basename(TrackerListBackup)
+        tLength = len(tFileName)
+        tDirName = os.path.dirname(TrackerListBackup)
+        for file in os.listdir(tDirName):
+            if file[:tLength] == tFileName and len(file) == tLength+11:  #说明是TorrentListBackup的每天备份文件
+                if file[tLength+1:tLength+8] != tLastMonth and file[tLength+1:tLength+8] != tThisMonth : #仅保留这个月和上月的备份文件
+                    try :   os.remove(os.path.join(tDirName,file))
+                    except: ErrorLog("failed to delete file:"+os.path.join(tDirName,file))
+        
+        #把旧文件备份成昨天日期的文件,后缀+"."+gLastCheckDate
+        tLastDayFileName = TorrentListBackup+"."+gLastCheckDate
+        if os.path.isfile(TorrentListBackup) :
+            if  os.path.isfile(tLastDayFileName) : os.remove(tLastDayFileName)
+            os.rename(TorrentListBackup,tLastDayFileName) 
+    else :
+        LogClear(TorrentListBackup)        
+
+    try :
+        fo = open(TrackerListBackup,"w")
+    except:
+        ErrorLog("Error:open ptbackup file to write："+TrackerListBackup)
+        return -1
+             
+    tStr = "FRDS|"     +GetDateDataStr(FRDSDataList);  fo.write(tStr+'\n')
+    tStr = "MTeam|"    +GetDateDataStr(MTeamDataList);  fo.write(tStr+'\n')
+    tStr = "HDHome|"   +GetDateDataStr(HDHomeDataList);  fo.write(tStr+'\n')
+    tStr = "BeiTai|"   +GetDateDataStr(BeiTaiDataList);  fo.write(tStr+'\n')
+    tStr = "JoyHD|"    +GetDateDataStr(JoyHDDataList);  fo.write(tStr+'\n')
+    tStr = "SoulVoice|"+GetDateDataStr(SoulVoiceDataList);  fo.write(tStr+'\n')
+    tStr = "PTHome|"   +GetDateDataStr(PTHomeDataList);  fo.write(tStr+'\n')
+    tStr = "PTSBao|"   +GetDateDataStr(PTSBaoDataList);  fo.write(tStr+'\n')
+    tStr = "LeagueHD|" +GetDateDataStr(LeagueHDDataList);  fo.write(tStr+'\n')
+    tStr = "HDArea|"   +GetDateDataStr(HDAreaDataList);  fo.write(tStr+'\n')
+    tStr = "AVGV|"     +GetDateDataStr(AVGVDataList);  fo.write(tStr+'\n')
+    
+    fo.close()
+    DebugLog("success write tracklist")
+    return 1
+#end def WritePTBackup
+  
 if __name__ == '__main__' :
 
     tCurrentTime = datetime.datetime.now()
@@ -976,7 +1193,10 @@ if __name__ == '__main__' :
         DebugLog("success ReadTRCategory:"+str(len(gTRCategoryList)).zfill(4)+" torrents readed.")
     if ReadIgnoreList() == 1:
         DebugLog("success ReadIgnoreList:")
-        for tFile in gPTIgnoreList : DebugLog(tFile['Path']+"::"+tFile['Name'])        
+        for tFile in gPTIgnoreList : DebugLog(tFile['Path']+"::"+tFile['Name'])      
+
+    if ReadTrackerBackup() == 1:
+        DebugLog("success ReadTrackerBackup:"+TrackerListBackup)
     
     if len(sys.argv) >= 2 :
         #如果输入参数为now时，执行一次性的检查任务
@@ -1010,6 +1230,10 @@ if __name__ == '__main__' :
             DebugLog("begin WritePTBackup to"+TorrentListBackup)
             if WritePTBackup() == 1:
                 DebugLog(str(len(gTorrentList)).zfill(4)+" torrents writed.")  
+                
+        if gIsNewDay :  
+            TrackerData()
+            WriteTrackerBackup()
         
         #转移QB的种子（停止状态，分类为保种）到TR做种
         tNumber = MoveTorrents()
