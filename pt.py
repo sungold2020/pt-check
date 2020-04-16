@@ -60,11 +60,11 @@ ErrorLogFile = "log/error2.log"             #错误日志
 #TR/QB的连接设置    
 TR_IP = "localhost"
 TR_PORT = 9091
-TR_USER = 'dummy'
-TR_PWD  = 'moonbeam'
+TR_USER = ''
+TR_PWD  = ''
 QB_IPPORT = 'localhost:8989'
-QB_USER = 'admin'
-QB_PWD =  'moonbeam'
+QB_USER = ''
+QB_PWD =  ''
 
 #连续NUMBEROFDAYS上传低于UPLOADTHRESHOLD，并且类别不属于'保种'的种子，会自动停止。
 #QB：把保种的种子分类设为"保种"，就不会停止
