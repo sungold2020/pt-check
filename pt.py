@@ -47,7 +47,8 @@ V3 ：
 五、V4
 1、增加QB的内存泄露功能，当内存占用超过95%后，重启QB
 六、V4.1
-1、增加一个各个网站的下载量统计
+1、增加一个各个网站的上传量统计
+2、增加一个统计各网站几天内无上传量的统计
 """
 
  
@@ -986,6 +987,18 @@ def SartQB():
     
 def TrackerData():
 
+    global FRDSDataList  
+    global MTeamDataList 
+    global HDHomeDataList
+    global BeiTaiDataList
+    global JoyHDDataList 
+    global SoulVoiceDataList
+    global PTHomeDataList
+    global PTSBaoDataList
+    global LeagueHDDataList
+    global HDAreaDataList
+    global AVGVDataList 
+
     tFRDSData = 0
     tMTeamData = 0
     tHDHomeData = 0
@@ -1019,7 +1032,7 @@ def TrackerData():
         elif Tracker.find("avgv") >= 0:       tAVGVData += tData
         else: ErrorLog("unknown tracker:"+gTorrentList[i].HASH); i+=1; continue
         i += 1
-        
+    
     FRDSDataList.append({'Date':gToday,'Data':tFRDSData})
     MTeamDataList.append({'Date':gToday,'Data':tMTeamData})
     HDHomeDataList.append({'Date':gToday,'Data':tHDHomeData})
@@ -1031,6 +1044,8 @@ def TrackerData():
     LeagueHDDataList.append({'Date':gToday,'Data':tLeagueHDData})
     HDAreaDataList.append({'Date':gToday,'Data':tHDAreaData})
     AVGVDataList.append({'Date':gToday,'Data':tAVGVData})
+
+
     if len(FRDSDataList) > 30: del FRDSDataList[0]
     if len(MTeamDataList) > 30: del MTeamDataList[0]
     if len(HDHomeDataList) > 30: del HDHomeDataList[0]
@@ -1042,7 +1057,7 @@ def TrackerData():
     if len(LeagueHDDataList) > 30: del LeagueHDDataList[0]
     if len(HDAreaDataList) > 30: del HDAreaDataList[0]
     if len(AVGVDataList) > 30: del AVGVDataList[0]
-    
+
     DebugLog("FRDS      upload(M):"+str(tFRDSData/(1000*1000)))
     DebugLog("MTeam     upload(M):"+str(tMTeamData/(1000*1000)))
     DebugLog("HDHome    upload(M):"+str(tHDHomeData/(1000*1000)))
@@ -1073,6 +1088,17 @@ def ReadTrackerBackup():
     """
     读取TrackerList的备份文件，用于各个Tracker的上传数据
     """
+    global FRDSDataList  
+    global MTeamDataList 
+    global HDHomeDataList
+    global BeiTaiDataList
+    global JoyHDDataList 
+    global SoulVoiceDataList
+    global PTHomeDataList
+    global PTSBaoDataList
+    global LeagueHDDataList
+    global HDAreaDataList
+    global AVGVDataList 
     
     #
     if not os.path.isfile(TrackerListBackup):
@@ -1091,12 +1117,12 @@ def ReadTrackerBackup():
             tData = int( (tDateDataList[i])[11:] )
             DateData.append({'Date':tDate,'Data':tData})
             i += 1
-        
-        if   Tracker == "FRDS": FRDSDataList = DateData
+
+        if   Tracker == "FRDS":  FRDSDataList = DateData           
         elif Tracker == "MTeam": MTeamDataList = DateData
         elif Tracker == "HDHome": HDHomeDataList = DateData
         elif Tracker == "BeiTai": BeiTaiDataList = DateData
-        elif Tracker == "JoyHD": JoyHDDataList = DateData
+        elif Tracker == "JoyHD":     JoyHDDataList = DateData
         elif Tracker == "SoulVoice": SoulVoiceDataList = DateData
         elif Tracker == "PTHome": PTHomeDataList = DateData
         elif Tracker == "PTSBao": PTSBaoDataList = DateData
@@ -1127,6 +1153,7 @@ def GetDaysOfNoUpload(tTrackerList):
             NumberOfDays += 1
         else:
             break
+        i -= 1
     return str(NumberOfDays).zfill(2)
 
 def WriteTrackerBackup():
@@ -1151,12 +1178,12 @@ def WriteTrackerBackup():
                     except: ErrorLog("failed to delete file:"+os.path.join(tDirName,file))
         
         #把旧文件备份成昨天日期的文件,后缀+"."+gLastCheckDate
-        tLastDayFileName = TorrentListBackup+"."+gLastCheckDate
-        if os.path.isfile(TorrentListBackup) :
+        tLastDayFileName = TrackerListBackup+"."+gLastCheckDate
+        if os.path.isfile(TrackerListBackup) :
             if  os.path.isfile(tLastDayFileName) : os.remove(tLastDayFileName)
-            os.rename(TorrentListBackup,tLastDayFileName) 
+            os.rename(TrackerListBackup,tLastDayFileName) 
     else :
-        LogClear(TorrentListBackup)        
+        LogClear(TrackerListBackup)        
 
     try :
         fo = open(TrackerListBackup,"w")
@@ -1178,6 +1205,7 @@ def WriteTrackerBackup():
     
     fo.close()
     DebugLog("success write tracklist")
+    
     return 1
 #end def WritePTBackup
   
@@ -1195,8 +1223,7 @@ if __name__ == '__main__' :
         DebugLog("success ReadIgnoreList:")
         for tFile in gPTIgnoreList : DebugLog(tFile['Path']+"::"+tFile['Name'])      
 
-    if ReadTrackerBackup() == 1:
-        DebugLog("success ReadTrackerBackup:"+TrackerListBackup)
+    if ReadTrackerBackup() == 1:  DebugLog("success ReadTrackerBackup:"+TrackerListBackup)
     
     if len(sys.argv) >= 2 :
         #如果输入参数为now时，执行一次性的检查任务
@@ -1234,6 +1261,8 @@ if __name__ == '__main__' :
         if gIsNewDay :  
             TrackerData()
             WriteTrackerBackup()
+
+            
         
         #转移QB的种子（停止状态，分类为保种）到TR做种
         tNumber = MoveTorrents()
