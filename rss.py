@@ -24,20 +24,20 @@ DebugLogFile = "log/debug.rss"             #日志，可以是相对路径，也
 ErrorLogFile = "log/error.rss"             #错误日志
 ExecLogFile  = "log/exec.rss"
 RSSList=[\
-    {'Name':'BeiTai',   'Url':'https://www.beitai.pt/torrentrss.php?rows=50&icat=1&ismalldescr=1&isize=1&linktype=dl&passkey=e193420544db01e767e2a214f30ec049&inclbookmarked=1'},\
-    {'Name':'LeagueHD', 'Url':'https://leaguehd.com/torrentrss.php?rows=50&icat=1&ismalldescr=1&isize=1&linktype=dl&passkey=dfab9bb8e00a9445760abb17ec2fa772&inclbookmarked=1'},\
-    {'Name':'HDHome',   'Url':'http://hdhome.org/torrentrss.php?rows=50&icat=1&ismalldescr=1&isize=1&linktype=dl&passkey=93581f449716e0adedc71620f78513d2&inclbookmarked=1'},\
-    {'Name':'HDArea',   'Url':'https://www.hdarea.co/torrentrss.php?rows=50&icat=1&ismalldescr=1&isize=1&linktype=dl&passkey=cd27426c9894a4c182eb99521afd6f38&inclbookmarked=1'},\
-    {'Name':'JoyHD',    'Url':'https://www.joyhd.net/torrentrss.php?rows=50&icat=1&ismalldescr=1&isize=1&linktype=dl&passkey=a770594966a29653632f94dce676f3b8&inclbookmarked=1'},\
-    {'Name':'SoulVoice','Url':'https://pt.soulvoice.club/torrentrss.php?rows=50&icat=1&ismalldescr=1&isize=1&linktype=dl&passkey=2e96eb27f1e14173af82b06fecfd767d&inclbookmarked=1'},\
-    {'Name':'PTSBao',   'Url':'https://ptsbao.club/pushrss.php?pushkey=HvBtGW1jKCijeZMC7IPOkJaOweULzAwK2nffSx3Akw3Jb-fL0ZgHEhNVONhMiEmHD_lHAR4BwM5FDMvGRRgIhuB'},\
-    {'Name':'PTHome',   'Url':'http://pthome.net/torrentrss.php?myrss=1&linktype=dl&uid=116626&passkey=c8b0815aa8bf6f1502260a11f8ed2ed7'},\
-    {'Name':'AVGV',     'Url':'http://avgv.cc/torrentrss.php?rows=50&icat=1&ismalldescr=1&isize=1&linktype=dl&passkey=9a269ba45540e516cbf15ebf6dd815b8&inclbookmarked=1'},\
-    {'Name':'FRDSAll',  'Url':'https://pt.keepfrds.com/torrentrss.php?rows=10&icat=1&ismalldescr=1&isize=1&linktype=dl&passkey=97f4eab2ad32ebf39ee4889f6328800b'},\
-    {'Name':'MTeam',    'Url':'https://pt.m-team.cc/torrentrss.php?https=1&rows=50&icat=1&ismalldescr=1&isize=1&linktype=dl&passkey=7044b36a9057090e36138df761ddfc5d&inclbookmarked=1'}]
+    {'Name':'BeiTai',   'Url':'https://www.beitai.pt/torrentrss.php?rows=50&icat=1&ismalldescr=1&isize=1&linktype=dl&passkey=&inclbookmarked=1'},\
+    {'Name':'LeagueHD', 'Url':'https://leaguehd.com/torrentrss.php?rows=50&icat=1&ismalldescr=1&isize=1&linktype=dl&passkey=d&inclbookmarked=1'},\
+    {'Name':'HDHome',   'Url':'http://hdhome.org/torrentrss.php?rows=50&icat=1&ismalldescr=1&isize=1&linktype=dl&passkey=9358&inclbookmarked=1'},\
+    {'Name':'HDArea',   'Url':'https://www.hdarea.co/torrentrss.php?rows=50&icat=1&ismalldescr=1&isize=1&linktype=dl&passkey=&inclbookmarked=1'},\
+    {'Name':'JoyHD',    'Url':'https://www.joyhd.net/torrentrss.php?rows=50&icat=1&ismalldescr=1&isize=1&linktype=dl&passkey=&inclbookmarked=1'},\
+    {'Name':'SoulVoice','Url':'https://pt.soulvoice.club/torrentrss.php?rows=50&icat=1&ismalldescr=1&isize=1&linktype=dl&passkey=&inclbookmarked=1'},\
+    {'Name':'PTSBao',   'Url':'https://ptsbao.club/pushrss.php?pushkey='},\
+    {'Name':'PTHome',   'Url':'http://pthome.net/torrentrss.php?myrss=1&linktype=dl&uid=116626&passkey='},\
+    {'Name':'AVGV',     'Url':'http://avgv.cc/torrentrss.php?rows=50&icat=1&ismalldescr=1&isize=1&linktype=dl&passkey=&inclbookmarked=1'},\
+    {'Name':'FRDSAll',  'Url':'https://pt.keepfrds.com/torrentrss.php?rows=10&icat=1&ismalldescr=1&isize=1&linktype=dl&passkey=9'},\
+    {'Name':'MTeam',    'Url':'https://pt.m-team.cc/torrentrss.php?https=1&rows=50&icat=1&ismalldescr=1&isize=1&linktype=dl&passkey=&inclbookmarked=1'}]
 
 
-BeiTaiAll='https://www.beitai.pt/torrentrss.php?rows=50&icat=1&ismalldescr=1&isize=1&linktype=dl&passkey=e193420544db01e767e2a214f30ec049'
+BeiTaiAll='https://www.beitai.pt/torrentrss.php?rows=50&icat=1&ismalldescr=1&isize=1&linktype=dl&passkey=e'
 
 
 import mysql.connector
@@ -45,7 +45,7 @@ g_DB = mysql.connector.connect(
   host="localhost",      # 数据库主机地址
   user="dummy",    # 数据库用户名
   passwd="moonbeam" ,  # 数据库密码
-  database="db_movies"
+  database=""
 )
 g_MyCursor = g_DB.cursor()
 
