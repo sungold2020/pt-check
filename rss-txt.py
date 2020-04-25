@@ -20,8 +20,8 @@ ExecLogFile  = "log/exec.rss"              #执行日志
 
 # 你的RSS订阅链接和名称，名称可以自己取，链接来自于网站
 RSSList=[\
-    {'Name':'HDXX', 'Url':'xxx'},\
-    {'Name':'HDX2', 'Url':'xxx'}]
+    {'Name':'名称1', 'Url':'链接1'},\
+    {'Name':'名称2', 'Url':'链接2'}]
 
     
 gRSSList = []  
