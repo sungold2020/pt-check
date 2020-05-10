@@ -5,16 +5,17 @@ import re
 import sys
 import shutil
 import datetime
-#import mysql.connector
+import mysql.connector
 from pathlib import Path
 
+SUCCESS           = 1    
 SRC_NOT_DIR       = -1
 DEST_NOT_DIR      = -2
 DEPTH_ERROR       = -3
 UNKNOWN_FILE_TYPE = -4
 FAILED_MOVE       = -5
 FAILED_RMDIR      = -6
-SUCCESS           = 1    
+TABLE_ERROR       = -7
 """
 修订记录：
 1、2020-03-15:V1.0 ，不足：1、ToBeExec的设定不应该留在movie.py中。2、日志需要重新设定
@@ -80,10 +81,11 @@ class Movie:
     #0表示测试，不执行修改，1表示执行修改
     ToBeExecDirName = False     # DirName名称
     ToBeExecRmdir   = False     # 从子文件夹将内容提上来 删除空子目录
-    
     DebugLogFile=""
     ExecLogFile=""
     ErrorLogFile=""
+    DBUserName=""
+    DBPassword=""
      
     def __init__(self,DirPath,DirName):
         Movie.Count += 1
@@ -145,6 +147,7 @@ class Movie:
         fo.write('\n')
         fo.close()
     def DebugLog(self, Str):    
+        #print(Str)
         self.Log(Movie.DebugLogFile,Str)
     def ExecLog(self,Str):
         self.DebugLog(Str)
@@ -315,6 +318,7 @@ class Movie:
         Path = os.path.join(self.DirPath,self.DirName)
         MkvName = os.path.join(Path,self.VideoFileName[0])
         RunTimeStr='mkvinfo --ui-language en_US "'+MkvName+'" | grep Duration'
+        self.DebugLog(RunTimeStr)
         #self.DebugLog (RunTimeStr)
         Line = os.popen(RunTimeStr).read()
         #self.DebugLog (Line[:24])
@@ -403,6 +407,7 @@ class Movie:
 
         elif MinFromMkv != 0 and abs(self.Min-MinFromMkv) >= 2:
             self.Min = MinFromMkv ; self.DirNameToDo = 1
+            DebugLog("Min-MinFromMkv >= 2")
         else:
             pass
             
@@ -450,6 +455,7 @@ class Movie:
                 self.ExecLog("mv "+self.DirName+'\n')
                 self.ExecLog("   "+DestDirName+'\n')
                 self.DebugLog ("rename success")
+                self.DirName = DestDirName
                 return 1
             except:
                 self.ErrorLog("mv failed:"+self.DirName+'\n')
@@ -498,7 +504,7 @@ class Movie:
         for File in os.listdir(os.path.join(self.DirPath,self.DirName)):
             FullPathFile = os.path.join(os.path.join(self.DirPath,self.DirName),File)
             if os.path.isdir(FullPathFile):
-                if File[0:2] == "SP" or File[0:3] == "srt" or File[0:4] == "info" : # 忽略掉特殊文件夹
+                if File[0:2] == "SP" or File[0:3] == "srt" or File[0:3] == "inf" or File[0:4] == "info" : # 忽略掉特殊文件夹
                     self.DebugLog ("it is SP/srt/info DIR:"+File)
                     continue
                 if os.path.islink(FullPathFile) :
@@ -610,12 +616,14 @@ class Movie:
         else:
             self.ErrorLog("no jpg file:"+self.DirName)
             self.Jpg = 0   #标记，但不返回，不影响后续检查操作
-            
+        #print("check jpg complete")
+        
         # 检查视频文件
         if self.NumberOfVideo == 0:
             self.ErrorLog("no video in"+self.DirName)
             self.IsError = 1 ; return 0
         elif self.NumberOfVideo == 1:
+            #print("check video complete")
             return 1
         else : #>=2忽略SP/sample外，还有多个视频文件，则需要进一步分析
             if self.Type == 1 or self.Type == 2 : #电视剧/纪录片
@@ -664,6 +672,7 @@ class Movie:
                         self.IsError = 1 ; return 0
                     i+=1
         #检查视频文件结束
+        #print("check video complete")
     #end def CheckDirCont    
         
     
@@ -772,6 +781,7 @@ class Movie:
                  TempStr == "uncut" or\
                  TempStr == "unrated" or \
                  TempStr == "complete" or\
+                 TempStr == "re-grade" or\
                  TempStr == "cut":
                 NumberOfElement += 1 ; LastIndex = i ; FormatSign[i] = 1
                 if self.Version == "": self.Version = FormatList[i]
@@ -784,12 +794,16 @@ class Movie:
                  TempStr.upper() == "USA" or \
                  TempStr.upper() == "FRA" or \
                  TempStr.upper() == "TW" or \
+                 TempStr.upper() == "BFI" or \
+                 TempStr.upper() == "TOHO" or \
                  TempStr.upper() == "HK":
                 NumberOfElement += 1 ; LastIndex = i ; FormatSign[i] = 1
                 self.NationVersion = FormatList[i]
                 self.DebugLog ("find NationVersion:"+self.NationVersion+"i="+str(i))
             #特别说明，例如rerip
-            elif TempStr == "rerip" or TempStr == "repack":
+            elif TempStr == "rerip" or \
+                 TempStr == "remastered" or\
+                 TempStr == "repack":
                 NumberOfElement += 1 ; LastIndex = i ; FormatSign[i] = 1
                 self.Special = FormatList[i]
                 self.DebugLog ("find Special:"+self.Special+"i="+str(i))
@@ -810,10 +824,14 @@ class Movie:
             #来源
             elif TempStr == "bluray" or \
                  TempStr == "blu-ray" or \
+                 TempStr == "hd-dvd" or \
                  TempStr == "uhd" or \
                  TempStr == "3d" or\
                  TempStr == "sbs" or\
+                 TempStr == "h-sbs" or\
+                 TempStr == "half-sbs" or\
                  TempStr == "nf" or\
+                 TempStr == "itunes" or\
                  TempStr == "web-dl" or \
                  TempStr == "hdtv" :
                 NumberOfElement += 1 ; LastIndex = i ; FormatSign[i] = 1
@@ -847,6 +865,7 @@ class Movie:
                  TempStr[0:3] == "dda" or \
                  TempStr[0:3] == "ddp" or \
                  TempStr[0:4] == "lpcm" or \
+                 TempStr[0:4] == "flac" or \
                  TempStr[0:5] == "atmos" or \
                  TempStr[0:6] == "truehd" or \
                  TempStr[0:7] == "true-hd" or \
@@ -882,7 +901,7 @@ class Movie:
                         break
                 self.DebugLog ("find Audio-end："+self.Audio)
             #音轨，如2Audio
-            elif TempStr[1:6] == "audio" :
+            elif TempStr[-5:] == "audio" or TempStr[-6:] == "audios":
                 NumberOfElement += 1 ; LastIndex = i ; FormatSign[i] = 1
                 self.Track = FormatList[i]
                 self.DebugLog ("find Track"+self.Track+"i="+str(i))
@@ -963,5 +982,255 @@ class Movie:
         return 1
     #end def SplitFormat()
     
+    def CheckTable(self,tDisk):
+        """
+        进行插入表或者更新
+        返回值：
+            TABLE_ERROR  错误
+        """
+        tCurrentTime = datetime.datetime.now()
+        gCheckTime=tCurrentTime.strftime('%Y-%m-%d %H:%M:%S')
+        if self.Collection == 1:
+            i = 0
+            while i < len(self.SubMovie):
+                if CheckTable(self.SubMovie[i],tDisk) != SUCCESS: return TABLE_ERROR
+                i += 1
+            return SUCCESS
+            
+        if self.Number < 0 or self.Copy < 0 : self.ErrorLog("Number error:"+str(self.Number)+"::"+str(self.Copy)); return TABLE_ERROR
+
+        g_DB = mysql.connector.connect(
+          host   = "localhost",      # 数据库主机地址
+          user   = Movie.DBUserName,  # 数据库用户名
+          passwd = Movie.DBPassword,  # 数据库密码
+          database="db_movies"
+        )
+        g_MyCursor = g_DB.cursor()
+        
+        #select from movies where Number == self.Number and Copy == self.Copy
+        se_sql = "select \
+            Nation,Type,Name,Min,FormatStr,DirName,Jpg,Nfo,NumberOfSP,NumberOfVideo,EnglishName,Year,Radio,Version,NationVersion,Special,Source,Compress,Audio,Track,Bit,HDR,ZipGroup,Deleted,Disk\
+            from movies where Number=%s and Copy=%s"
+        se_val = (self.Number,self.Copy)    
+        g_MyCursor.execute(se_sql,se_val)
+        tSelectResult = g_MyCursor.fetchall()
+        #假如不存在就insert
+        if len(tSelectResult) == 0: 
+            Number = self.Number
+            Copy = self.Copy
+            Nation = self.Nation
+            Type = self.Type
+            Name = self.Name
+            Min = self.Min
+            FormatStr = self.FormatStr
+            DirName = self.DirName
+            Jpg = self.Jpg
+            Nfo = self.Nfo
+            NumberOfSP = self.NumberOfSP
+            NumberOfVideo = self.NumberOfVideo
+            EnglishName = self.EnglishName
+            Year = self.Year
+            Radio = self.Radio
+            Version = self.Version
+            NationVersion = self.NationVersion
+            Special = self.Special
+            Source = self.Source
+            Compress = self.Compress
+            Audio = self.Audio
+            Track = self.Track
+            Bit = self.Bit 
+            HDR = self.HDR 
+            ZipGroup = self.ZipGroup
+            Deleted = 0
+            Disk = tDisk
+            UpdateTime = gCheckTime
+            CheckTime = gCheckTime
+            in_sql = "INSERT INTO movies \
+                    (Number,Copy,Nation,Type,Name,Min,FormatStr,DirName,Jpg,Nfo,NumberOfSP,NumberOfVideo,EnglishName,Year,Radio,Version,NationVersion,Special,Source,Compress,Audio,Track,Bit,HDR,ZipGroup,Deleted,Disk,UpdateTime,CheckTime) \
+              VALUES(%s    ,%s  ,%s    ,%s   ,%s ,%s ,%s       ,%s      ,%s,%s ,%s        ,%s           ,%s         ,%s  ,%s   ,%s     ,%s           ,%s     ,%s    ,%s      ,%s   ,%s   ,%s ,%s ,%s      ,%s     ,%s  ,%s        ,%s )"
+            in_val= (Number,Copy,Nation,Type,Name,Min,FormatStr,DirName,Jpg,Nfo,NumberOfSP,NumberOfVideo,EnglishName,Year,Radio,Version,NationVersion,Special,Source,Compress,Audio,Track,Bit,HDR,ZipGroup,Deleted,Disk,UpdateTime,CheckTime)
+            try:
+                g_MyCursor.execute(in_sql,in_val)
+                g_DB.commit()
+            except:
+                self.ErrorLog("insert error:"+DirName)
+                g_DB.close()
+                return TABLE_ERROR
+            else:
+                print("insert:"+DirName)
+                self.DebugLog("insert:"+DirName)
+                g_DB.close()
+                return SUCCESS
+        #已经存在就update
+        elif len(tSelectResult) == 1:
+            Nation        = self.Nation;        
+            Type          = self.Type;         
+            Name          = self.Name;       
+            Min           = self.Min;        
+            FormatStr     = self.FormatStr;   
+            DirName       = self.DirName;     
+            Jpg           = self.Jpg;     
+            Nfo           = self.Nfo;   
+            NumberOfSP    = self.NumberOfSP;  
+            NumberOfVideo = self.NumberOfVideo;
+            EnglishName   = self.EnglishName;  
+            Year          = self.Year;     
+            Radio         = self.Radio;    
+            Version       = self.Version;  
+            NationVersion = self.NationVersion;
+            Special       = self.Special;  
+            Source        = self.Source;  
+            Compress      = self.Compress;  
+            Audio         = self.Audio;  
+            Track         = self.Track; 
+            Bit           = self.Bit;  
+            HDR           = self.HDR; 
+            ZipGroup      = self.ZipGroup;   
+            Deleted       = 0;        
+            Disk          = tDisk; 
+            UpdateTime    = gCheckTime
+            CheckTime     = gCheckTime
+            Number         = self.Number
+            Copy          = self.Copy
+            
+            tUpdated = 0; tSelect = tSelectResult[0]
+            if Nation        != tSelect[0] : tUpdated += 1
+            if Type          != tSelect[1] : tUpdated += 1
+            if Name          != tSelect[2] : tUpdated += 1
+            if Min           != tSelect[3] : tUpdated += 1
+            if FormatStr     != tSelect[4] : tUpdated += 1
+            if DirName       != tSelect[5] : tUpdated += 1
+            if Jpg           != tSelect[6] : tUpdated += 1
+            if Nfo           != tSelect[7] : tUpdated += 1
+            if NumberOfSP    != tSelect[8] : tUpdated += 1
+            if NumberOfVideo != tSelect[9] : tUpdated += 1
+            if EnglishName   != tSelect[10] : tUpdated += 1
+            if Year          != tSelect[11] : tUpdated += 1
+            if Radio         != tSelect[12] : tUpdated += 1
+            if Version       != tSelect[13] : tUpdated += 1
+            if NationVersion != tSelect[14] : tUpdated += 1
+            if Special       != tSelect[15] : tUpdated += 1
+            if Source        != tSelect[16] : tUpdated += 1
+            if Compress      != tSelect[17] : tUpdated += 1
+            if Audio         != tSelect[18] : tUpdated += 1
+            if Track         != tSelect[19] : tUpdated += 1
+            if Bit           != tSelect[20] : tUpdated += 1
+            if HDR           != tSelect[21] : tUpdated += 1
+            if ZipGroup      != tSelect[22] : tUpdated += 1  
+            if Deleted       != tSelect[23] : tUpdated += 1
+            if Disk          != tSelect[24] : tUpdated += 1        
+
+            if Nation        != tSelect[0] : print("Nation: new="+Nation+"::"+tSelect[0])
+            if Type          != tSelect[1] : print("Type: new="+str(Type)+"::"+str(tSelect[1]))
+            if Name          != tSelect[2] : print("Name: new="+Name+"::"+tSelect[2])
+            if Min           != tSelect[3] : print("Min: new="+str(Min)+"::"+str(tSelect[3]))
+            if FormatStr     != tSelect[4] : print("FormatStr: new="+FormatStr+"::"+tSelect[4])
+            if DirName       != tSelect[5] : print("DirName: new="+DirName+"::"+tSelect[5])
+            if Jpg           != tSelect[6] : print("Jpg: new="+str(Jpg)+"::"+str(tSelect[6]))
+            if Nfo           != tSelect[7] : print("Nfo: new="+str(Nfo)+"::"+str(tSelect[7]))
+            if NumberOfSP    != tSelect[8] : print("NumberOfSP: new="+str(NumberOfSP)+"::"+str(tSelect[8]))
+            if NumberOfVideo != tSelect[9] : print("NumberOfVideo: new="+str(NumberOfVideo)+"::"+str(tSelect[9]))
+            if EnglishName   != tSelect[10] : print("EnglishName: new="+EnglishName+"::"+tSelect[10])
+            if Year          != tSelect[11] : print("Year: new="+str(Year)+"::"+str(tSelect[11]))
+            if Radio         != tSelect[12] : print("Radio: new="+Radio+"::"+tSelect[12])
+            if Version       != tSelect[13] : print("Version: new="+Version+"::"+tSelect[13])
+            if NationVersion != tSelect[14] : print("NationVersion: new="+NationVersion+"::"+tSelect[14])
+            if Special       != tSelect[15] : print("Special: new="+Special+"::"+tSelect[15])
+            if Source        != tSelect[16] : print("Source: new="+Source+"::"+tSelect[16])
+            if Compress      != tSelect[17] : print("Compress: new="+Compress+"::"+tSelect[17])
+            if Audio         != tSelect[18] : print("Audio: new="+Audio+"::"+tSelect[18])
+            if Track         != tSelect[19] : print("Track: new="+Track+"::"+tSelect[19])
+            if Bit           != tSelect[20] : print("Bit: new="+Bit+"::"+tSelect[20])
+            if HDR           != tSelect[21] : print("HDR: new="+HDR+"::"+tSelect[21])
+            if ZipGroup      != tSelect[22] : print("ZipGroup: new="+ZipGroup+"::"+tSelect[22])
+            if Deleted       != tSelect[23] : print("Deleted: new="+str(Deleted)+"::"+str(tSelect[23]))
+            if Disk          != tSelect[24] : print("Disk: new="+Disk+"::"+tSelect[24])        
+            if Name != tSelect[2] :
+                #序号相同，但名字不同，则有可能是序号重复了（小概率是修改名字了），仍然继续更新，但记录错误日志，待手工核实
+                self.ErrorLog("Warning update New DirName:"+DirName)
+                self.ErrorLog("               old DirName:"+tSelect[5])
+                #return TABLE_ERROR
+                
+            if tUpdated >= 1:
+                up_sql = "UPDATE movies set \
+                        Nation=%s,\
+                        Type=%s,\
+                        Name=%s,\
+                        Min=%s,\
+                        FormatStr=%s,\
+                        DirName=%s,\
+                        Jpg=%s,\
+                        Nfo=%s,\
+                        NumberOfSP=%s,\
+                        NumberOfVideo=%s,\
+                        EnglishName=%s,\
+                        Year=%s,\
+                        Radio=%s,\
+                        Version=%s,\
+                        NationVersion=%s,\
+                        Special=%s,\
+                        Source=%s,\
+                        Compress=%s,\
+                        Audio=%s,\
+                        Track=%s,\
+                        Bit=%s,\
+                        HDR=%s,\
+                        ZipGroup=%s,\
+                        Deleted=%s,\
+                        Disk=%s,\
+                        UpdateTime=%s,\
+                        CheckTime=%s \
+                        where Number=%s and copy=%s"
+                up_val = (\
+                        Nation,\
+                        Type,\
+                        Name,\
+                        Min,\
+                        FormatStr,\
+                        DirName,\
+                        Jpg,\
+                        Nfo,\
+                        NumberOfSP,\
+                        NumberOfVideo,\
+                        EnglishName,\
+                        Year,\
+                        Radio,\
+                        Version,\
+                        NationVersion,\
+                        Special,\
+                        Source,\
+                        Compress,\
+                        Audio,\
+                        Track,\
+                        Bit,\
+                        HDR,\
+                        ZipGroup,\
+                        Deleted,\
+                        Disk,\
+                        UpdateTime,\
+                        CheckTime,\
+                        Number, Copy)            
+            else:
+                up_sql = "UPDATE movies set CheckTime = %s where Number= %s and Copy = %s"
+                up_val = (CheckTime,Number,Copy)
+            try:
+                g_MyCursor.execute(up_sql,up_val)
+                g_DB.commit()
+            except:
+                self.ErrorLog("update error:"+DirName+":"+up_sql)
+                g_DB.close()
+                return TABLE_ERROR
+            else:
+                if tUpdated >= 1:
+                    print("update:"+DirName)
+                    self.DebugLog("update:"+DirName+" ::where Number="+str(Number).zfill(4)+"and Copy="+str(Copy))
+                else:
+                    self.DebugLog("update checktime:"+DirName)
+                g_DB.close()
+                return SUCCESS
+        else : 
+            self.ErrorLog("2+ result:"+str(self.Number)+"::"+str(self.Copy))
+            g_DB.close()
+            return TABLE_ERROR
 #end class Movie
 
