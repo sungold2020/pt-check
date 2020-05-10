@@ -11,7 +11,10 @@ import datetime
 import qbittorrentapi 
 import transmissionrpc
 import psutil
- 
+import movie
+import mysql.connector
+from gen import Gen
+import requests
 """
 一、读取备份种子数据，建立种子列表
 备份文件在TorrentListBackup
@@ -26,36 +29,46 @@ import psutil
 5、最后更新列表并写入备份文件
 
 修订记录：
--、2020-03-15 12:00：V2.0：
+2020-03-15 12:00：V2.0：
     1、重新用transmissionrpc，python-qbittorrent接口编写。
     2、封装了两个客户端的不同，简化代码
     3、重新整理了日志
     不足：1、不支持QB的tags设定
-二、2020-03-16:V2.1，
+2020-03-16:V2.1，
     1,判断IsLowUpload后，需要判断种子状态，对于已经为停止/暂停状态的种子不做处理。
     2,修订原来TRSEEDPATH仅为单一目录，更改为目录列表：TRSeedFolerList，
     3、增加一个立即执行的入口，pt.py now就会立即执行一次检查，仅检查种子并处理，但不写入backup文件
-三、2020-03-17：V2.2
+2020-03-17：V2.2
     1,GetDirName, files == 1, bug
 
-四、2020-03-18：V2.3
+2020-03-18：V2.3
     1、把种子信息备份文件TorrentListBackup，增加保留当月及上月的备份文件。后缀为"."+"日期"
 V3 ：
     1、增加MoveTorrents，从QB状态为停止，分类为“保种”的种子转移到TR进行做种
     2、修订checkdisk的入口
     
-五、V4
+V4
 1、增加QB的内存泄露功能，当内存占用超过95%后，重启QB
-六、V4.1
+V4.1
 1、增加一个各个网站的上传量统计
 2、增加一个统计各网站几天内无上传量的统计
+
+2020-04-24：V5
+1、增加一个保存功能，
 """
 
  
 #运行设置############################################################################
 #日志文件
-DebugLogFile = "log/debug2.log"             #日志，可以是相对路径，也可以是绝对路径
-ErrorLogFile = "log/error2.log"             #错误日志
+DebugLogFile = "log/pt.log"             #日志，可以是相对路径，也可以是绝对路径
+ErrorLogFile = "log/pt.error"             #错误日志
+movie.Movie.ErrorLogFile  =  ErrorLogFile
+movie.Movie.ExecLogFile  =  DebugLogFile
+movie.Movie.DebugLogFile  =  "log/pt.debug"
+movie.Movie.ToBeExecDirName  =  True
+movie.Movie.ToBeExecRmdir  =  False
+movie.Movie.DBUserName = "dummy"
+movie.Movie.DBPassword = ""
 
 #TR/QB的连接设置    
 TR_IP = "localhost"
@@ -109,6 +122,7 @@ PTSBaoDataList = []
 LeagueHDDataList = []
 HDAreaDataList = []
 AVGVDataList   = []
+HDSkyDataList   = []
 TrackerListBackup = "data/tracker.txt"               
 #运行设置结束#################################################################################
 
@@ -236,12 +250,22 @@ class TorrentInfo :
             if self.Client == TR :
                 Name = files[i]['name']  
                 Size = files[i]['size']
+                Done = (files[i]['completed']/files[i]['size'])*100
             else:
                 Name = files[i].name
                 Size = files[i].size
+                Done = files[i].progress*100
             #Done = int (files[i]['completed']/Size * 100)    
-            self.FileName.append( {'Name':Name,'Size':Size} )
+            self.FileName.append( {'Name':Name,'Size':Size,'Done':Done} )
             i += 1
+        
+        #首先找该种子是否存在
+        tNoOfTheList = FindTorrent(self.Client,self.HASH)
+        if tNoOfTheList == -1 : #没找到，说明是新种子，加入TorrentList
+            gTorrentList.append(self)
+            DebugLog("add torrent, name="+self.Name)
+            return ADDED
+        gTorrentList[tNoOfTheList].Checked = 1
         
         #获取RootFolder和DirName
         if self.GetDirName() == -1:
@@ -252,6 +276,7 @@ class TorrentInfo :
             if gIsNewDay == True :
                 i = 0 
                 while i < len(self.FileName) :
+                    if self.FileName[i]['Done'] != 100: continue
                     tFullFileName = os.path.join(self.SavedPath, self.FileName[i]['Name'])
                     if not os.path.isfile(tFullFileName):
                         ErrorLog(tFullFileName+" does not exist")
@@ -260,14 +285,20 @@ class TorrentInfo :
                         ErrorLog(tFullFileName+" file size error. torrent size:"+str(self.FileName[i]['Size']))
                         return CHECKERROR
                     i+=1
-            else:
+            else: #不是新的一天，对于非转移/保种/低上传分类的种子，仅检查第一个下载完成的文件是否存在
                 if self.Client == QB and (self.Category ==  '保种' or self.Category == '转移' or self.Category == '低上传') : pass
                 elif  self.Client == TR and (self.Category == '保种' or IsSubDir(self.SavedPath,TRSeedFolderList) or self.Category == '低上传') : pass
                 else :
                     #DebugLog("check torrent file:"+self.Name+"::"+self.SavedPath)
-                    tFullFileName = os.path.join(self.SavedPath, self.FileName[0]['Name'])
-                    if not os.path.isfile(tFullFileName) :
-                        ErrorLog(tFullFileName+" does not exist")
+                    i = 0
+                    while i < len(self.FileName):
+                        if self.FileName[i]['Done'] != 100: continue
+                        tFullFileName = os.path.join(self.SavedPath, self.FileName[0]['Name'])
+                        if not os.path.isfile(tFullFileName) :
+                            ErrorLog(tFullFileName+" does not exist")
+                            return CHECKERROR
+                        else: break
+                        i += 1
 
         if self.Status == STOP and self.Category == '低上传':
             tFullPath = os.path.join(self.RootFolder,self.DirName)
@@ -280,15 +311,8 @@ class TorrentInfo :
                 else:
                     DebugLog("lowupload, so mv dir "+tFullPath)
             #DebugLog("lowupload, so mv dir "+tFullPath)
-        #更新TorrentList        
-        #首先找该种子是否存在
-        tNoOfTheList = FindTorrent(self.Client,self.HASH)
-        if tNoOfTheList == -1 : #没找到，说明是新种子，加入TorrentList
-            gTorrentList.append(self)
-            DebugLog("add torrent, name="+self.Name)
-            return ADDED
-        
-        #找到旧种子，进行检查和更新操作
+            
+        #更新TorrentList ，进行检查和更新操作
         tUpdate = 0
         if gTorrentList[tNoOfTheList].Name        != self.Name       : gTorrentList[tNoOfTheList].Name        = self.Name       ; tUpdate += 1
         if gTorrentList[tNoOfTheList].Done        != self.Done       : gTorrentList[tNoOfTheList].Done        = self.Done       ; tUpdate += 1
@@ -301,24 +325,7 @@ class TorrentInfo :
         if gTorrentList[tNoOfTheList].RootFolder  != self.RootFolder : gTorrentList[tNoOfTheList].RootFolder  = self.RootFolder ; tUpdate += 1
         if gTorrentList[tNoOfTheList].DirName     != self.DirName    : gTorrentList[tNoOfTheList].DirName     = self.DirName    ; tUpdate += 1
         if gTorrentList[tNoOfTheList].FileName    != self.FileName   : gTorrentList[tNoOfTheList].FileName    = self.FileName   ; tUpdate += 1
-        if gTorrentList[tNoOfTheList].Tracker     != self.Tracker    : gTorrentList[tNoOfTheList].Tracker     = self.Tracker    ; tUpdate += 1
-
-        """tUpdate = 0
-        if gTorrentList[tNoOfTheList].Name        != self.Name       : gTorrentList[tNoOfTheList].Name        = self.Name       ; tUpdate += 1;DebugLog("name change,old="+gTorrentList[tNoOfTheList].Name+"::now="+self.Name)
-        if gTorrentList[tNoOfTheList].Done        != self.Done       : gTorrentList[tNoOfTheList].Done        = self.Done       ; tUpdate += 1;DebugLog("Done change,old="+gTorrentList[tNoOfTheList].Done+"::now="+self.Done)
-        if gTorrentList[tNoOfTheList].Status      != self.Status     : gTorrentList[tNoOfTheList].Status      = self.Status     ; tUpdate += 1;DebugLog("Status change,old="+gTorrentList[tNoOfTheList].Status+"::now="+self.Status)
-        if gTorrentList[tNoOfTheList].Category    != self.Category   : gTorrentList[tNoOfTheList].Category    = self.Category   ; tUpdate += 1;DebugLog("Category change,old="+gTorrentList[tNoOfTheList].Category+"::now="+self.Category)
-        if gTorrentList[tNoOfTheList].Tags        != self.Tags       : gTorrentList[tNoOfTheList].Tags        = self.Tags       ; tUpdate += 1;DebugLog("Tags change,old="+gTorrentList[tNoOfTheList].Tags+"::now="+self.Tags)
-        if gTorrentList[tNoOfTheList].SavedPath   != self.SavedPath  : gTorrentList[tNoOfTheList].SavedPath   = self.SavedPath  ; tUpdate += 1;DebugLog("SavedPath change,old="+gTorrentList[tNoOfTheList].SavedPath+"::now="+self.SavedPath)
-        if gTorrentList[tNoOfTheList].AddDateTime != self.AddDateTime: gTorrentList[tNoOfTheList].AddDateTime = self.AddDateTime; tUpdate += 1;DebugLog("AddDateTime change,old="+gTorrentList[tNoOfTheList].AddDateTime+"::now="+self.AddDateTime)
-        if gTorrentList[tNoOfTheList].RootFolder  != self.RootFolder : gTorrentList[tNoOfTheList].RootFolder  = self.RootFolder ; tUpdate += 1;DebugLog("RootFolder change,old="+gTorrentList[tNoOfTheList].RootFolder+"::now="+self.RootFolder)
-        if gTorrentList[tNoOfTheList].DirName     != self.DirName    : gTorrentList[tNoOfTheList].DirName     = self.DirName    ; tUpdate += 1;DebugLog("DirName change,old="+gTorrentList[tNoOfTheList].DirName+"::now="+self.DirName)
-        if gTorrentList[tNoOfTheList].FileName    != self.FileName   : gTorrentList[tNoOfTheList].FileName    = self.FileName   ; tUpdate += 1;DebugLog("FileName change,old=")
-        """
-        #test
-        #print(str(gTorrentList[tNoOfTheList].IsRootFolder)+'|'+gTorrentList[tNoOfTheList].SavedPath+'|'+gTorrentList[tNoOfTheList].RootFolder+'|'+gTorrentList[tNoOfTheList].DirName+'|'+gTorrentList[tNoOfTheList].Name)
-            
-        gTorrentList[tNoOfTheList].Checked = 1         
+        if gTorrentList[tNoOfTheList].Tracker     != self.Tracker    : gTorrentList[tNoOfTheList].Tracker     = self.Tracker    ; tUpdate += 1        
         
         if gIsNewDay == True :   #新的一天，更新记录每天的上传量（绝对值）
             gTorrentList[tNoOfTheList].DateData.append(self.DateData[0])
@@ -659,11 +666,15 @@ def CheckTorrents(Client):
                 if Tags != 'frds':
                     torrent.remove_tags()
                     torrent.add_tags('frds')
-            #elif Tracker.find("m-team") >= 0 :
-            #    if Tags != 'mteam':
-            #        torrent.remove_tags()
-            #        torrent.add_tags('mteam')
-            elif Tracker == "": pass
+            elif Tracker.find("m-team") >= 0 :
+                if Tags != 'mteam':
+                    torrent.remove_tags()
+                    torrent.add_tags('mteam')
+            elif Tracker.find("hdsky") >= 0 :
+                if Tags != 'hdsky':
+                    torrent.remove_tags()
+                    torrent.add_tags('hdsky')
+            elif Tracker == "" : pass
             else:
                 if Tags != 'other':
                     torrent.remove_tags()
@@ -671,10 +682,7 @@ def CheckTorrents(Client):
                 
         if Client == TR:  tReturn = tTorrentInfo.CheckTorrent(torrent.files())
         else :            tReturn = tTorrentInfo.CheckTorrent(torrent.files)
-        #else :            tReturn = tTorrentInfo.CheckTorrent(qb_client.get_torrent_files(torrent['hash']))
-
-
-                
+          
         if tReturn == CHECKERROR :        tNumberOfError += 1
         elif tReturn == LOWUPLOAD :       tNumberOfPaused += 1
         elif tReturn == ADDED :           tNumberOfAdded += 1
@@ -710,11 +718,11 @@ def CheckTorrents(Client):
             i += 1                
  
     DebugLog("complete CheckTorrents  from "+Client)
-    DebugLog(str(tNumberOfAdded).zfill(4)+" torrents added")
-    DebugLog(str(tNumberOfDeleted).zfill(4)+" torrents deleted")
-    DebugLog(str(tNumberOfUpdated).zfill(4)+" torrents updated")
-    DebugLog(str(tNumberOfError).zfill(4)+" torrents paused for error")
-    DebugLog(str(tNumberOfPaused).zfill(4)+" torrents paused for low upload")
+    if tNumberOfAdded > 0   : DebugLog(str(tNumberOfAdded).zfill(4)+" torrents added")
+    if tNumberOfDeleted > 0 : DebugLog(str(tNumberOfDeleted).zfill(4)+" torrents deleted")
+    if tNumberOfUpdated > 0 : DebugLog(str(tNumberOfUpdated).zfill(4)+" torrents updated")
+    if tNumberOfError > 0   : DebugLog(str(tNumberOfError).zfill(4)+" torrents paused for error")
+    if tNumberOfPaused > 0 : DebugLog(str(tNumberOfPaused).zfill(4)+" torrents paused for low upload")
     if  tNumberOfAdded >= 1 or \
         tNumberOfDeleted >= 1 or \
         tNumberOfUpdated >= 1 or \
@@ -879,6 +887,7 @@ def MoveTorrents():
         DebugLog("connected to QB and TR")
     except:
         DebugLog("failed to connect QB  or TR")
+        return -1
     
     tNumber = 0
     for qb_torrent in qb_client.torrents_info():        
@@ -948,6 +957,176 @@ def MoveTorrents():
     if tNumber > 0 : gTRCategoryUpdate = True
     return tNumber
 #end def MoveTorrents    
+
+def SaveTorrents():
+    """
+    将QB中类别为'save'的种子保存到tobe目录
+    0、暂停种子
+    1、从rss表中获取toubanid和imdbid
+    2、根据doubanid或者imdbid刮削豆瓣电影信息
+    3、移入或者更名至tobe目录下的目录文件夹
+    4 下载poster.jpg文件    
+    5、检查该目录并加入表
+    6、更新豆瓣刮削信息到表movies
+    7、把种子分类设为空  
+    """
+    
+    try:
+        qb_client = qbittorrentapi.Client(host=QB_IPPORT, username=QB_USER, password=QB_PWD)            
+        qb_client.auth_log_in()
+        DebugLog("connected to QB for saveTorrents")
+    except:
+        DebugLog("failed to connect QB  for saveTorrents")
+    
+    for torrent in qb_client.torrents_info():        
+        if torrent.category != "save" : continue
+        torrent.pause()
+        
+        #1、从rss表中获取toubanid和imdbid
+        HASH = torrent.hash
+        g_DB = mysql.connector.connect( host="localhost",  user="dummy",  passwd="" , database="db_movies")
+        g_MyCursor = g_DB.cursor()
+        sel_sql = 'select doubanid,imdbid from rss where id = %s'
+        sel_val = (HASH,)
+        g_MyCursor.execute(sel_sql,sel_val)
+        SelectResult = g_MyCursor.fetchall()
+        if len(SelectResult) != 1: ErrorLog("failed to find doubanid or imdbid :{}".format(torrent.name)); continue
+
+        #2、根据doubanid或者imdbid刮削豆瓣电影信息
+        DoubanID = SelectResult[0][0]
+        IMDBID   = SelectResult[0][1]
+        DebugLog("{}:{}::{}".format(DoubanID,IMDBID,HASH))
+        if DoubanID != "" :   tMovieInfo = Gen({'site':'douban','sid':DoubanID}).gen(_debug=True)
+        elif IMDBID != "" :   tMovieInfo = Gen({'site':'douban','sid':IMDBID  }).gen(_debug=True)
+        else :  ErrorLog("empty link:"+torrent.name); continue
+        if not tMovieInfo["success"]: ErrorLog("failed to request from douban:"+torrent.name); continue
+ 
+        if tMovieInfo['episodes'] == "": tMovieInfo['episodes'] = '0'
+        if tMovieInfo['year']     == "": tMovieInfo['year']     = '0'   
+        tNation      = (tMovieInfo['region'][0]).strip()
+        tYear        = int(tMovieInfo['year'])
+        tDoubanID    = tMovieInfo['sid']
+        tIMDBID      = tMovieInfo['imdb_id']
+        tName        = tMovieInfo['chinese_title']
+        tForeignName = tMovieInfo['foreign_title']
+        tDirector    = ','.join(tMovieInfo['director'])
+        tActors      = ','.join(tMovieInfo['cast'])
+        tEpisodes    = int(tMovieInfo['episodes'])
+        tPoster      = tMovieInfo['poster']
+        tDoubanScore = tMovieInfo['douban_rating_average']
+        tIMDBScore   = tMovieInfo['imdb_rating']
+        tOtherNames  = ','.join(tMovieInfo['aka'])
+        tGenre       = ','.join(tMovieInfo['genre'])
+            
+        if   tNation[-1:] == '国' : tNation = tNation[:-1]  #去除国家最后的国字
+        elif tNation == '香港'    : tNation = '港'
+        elif tNation == '中国大陆': tNation = '国'
+        elif tNation == '中国台湾': tNation = '台'
+        elif tNation == '日本'    : tNation = '日'
+        else : pass
+        tIndex = tIMDBScore.find('/')
+        if tIndex > 0: tIMDBScore = tIMDBScore[:tIndex]
+        else:          tIMDBScore = ""
+        #判断类型，纪录片，电视剧，电影
+        if tGenre.find('纪录') >= 0 :tType = 2
+        elif tEpisodes > 0          :tType = 1
+        else                        :tType = 0             
+
+        #3、移入或者更名至tobe目录下的目录文件夹 
+        #3.1 组装目标文件夹名需要先获取Number和Copy
+        Number = Copy = 0
+        if tIMDBID == "" : ErrorLog("empty IMDBID:"+torrent.name); continue
+        g_DB = mysql.connector.connect( host="localhost",  user="dummy",  passwd="" , database="db_movies")
+        g_MyCursor = g_DB.cursor()
+        sel_sql = 'select number,copy from movies where imdbid = %s'
+        sel_val = (tIMDBID,)
+        g_MyCursor.execute(sel_sql,sel_val)
+        SelectResult = g_MyCursor.fetchall()
+        if len(SelectResult) == 0: #说明不存在，需要获取max(number)+1
+            sel_sql = 'select max(number) from movies'
+            g_MyCursor.execute(sel_sql)
+            SelectResult = g_MyCursor.fetchall()
+            Number = SelectResult[0][0]+1
+        elif len(SelectResult) == 1:
+            Number = SelectResult[0][0]
+            Copy   = SelectResult[0][1]
+        else:
+            #多条记录，有可能是正常的，也可能是异常的。先取第一条记录的Number,记录下日志，待手工检查
+            DebugLog("2+ record in movies where imdbid = "+IMDBID)
+            Number = SelectResult[0][0]
+            for i in range(len(SelectResult)):
+                if SelectResult[i][0] != Number:
+                    ErrorLog("diff number in case of same imdbid:"+IMDBID)
+                    break
+        g_DB.close()
+        
+        #3.2 组装新的目标文件夹名
+        tTorrentName = re.sub(u"[\u4e00-\u9f50]+","",torrent.name) #去掉name中的中文字符
+        #部分种子只有一个视频文件，name会以.mkv类似格式结尾
+        if tTorrentName[-4:] == '.mp4' or tTorrentName[-4:] == '.mkv' or tTorrentName[-4:] == 'avi' or tTorrentName[-4:] == 'wmv': tTorrentName = tTorrentName[:-4]
+        if Copy > 0 : DirName = str(Number).zfill(4)+'-'+str(Copy)+'-'+tNation
+        else        : DirName = str(Number).zfill(4)              +'-'+tNation
+        if   tType == 0: DirName +=              '-'+tName+' '+tTorrentName
+        elif tType == 1: DirName += '-'+'电视剧'+'-'+tName+' '+tTorrentName
+        elif tType == 2: DirName += '-'+'纪录片'+'-'+tName+' '+tTorrentName
+        else: ErrorLog("error type:"+tType)
+
+        #3.3 移动或者更名至目标文件夹
+        tSaveDirName = os.path.join(torrent.save_path,torrent.name)
+        tToBeDirName = os.path.join(ToBePath,torrent.name)
+        DestDirName  = os.path.join(ToBePath,DirName)
+        if os.path.exists(DestDirName):   DebugLog("DirName exists:"+DestDirName)
+        else:
+            if os.path.exists(tToBeDirName):  srcDirName = tToBeDirName  #从tobe目录中去改名
+            else:                             srcDirName = tSaveDirName  #去原始保存目录移动到目标目录
+            try:
+                #原种子没有目录只是一个文件，那就新建目标目录，move函数就会把这个文件移动到目标目录
+                if os.path.isfile(srcDirName): os.mkdir(DestDirName) 
+                shutil.move(srcDirName,DestDirName)
+            except Exception as err:
+                ErrorLog("failed to mv dir:"+DestDirName)
+                print(err)
+                continue
+            else:  DebugLog("success mv dir to tobe:"+DestDirName)
+
+        #4 下载poster.jpg文件
+        DestFullFile=os.path.join(DestDirName,"poster.jpg")
+        try:
+            f=requests.get(tPoster)
+            with open(DestFullFile,"wb") as code:
+                code.write(f.content)
+        except Exception as err:
+            print(err)
+            ErrorLog("failed to download poster.jpg from:"+tPoster)
+        else : DebugLog("success download jpg file")
+
+        #5 检查该目录并加入表
+        tMovie = movie.Movie(ToBePath, DirName)
+        if tMovie.CheckMovie() != 1      :  ErrorLog("failed to check:"+DirName)  #; continue，继续插入表
+        if tMovie.CheckTable("tobe") != 1:  ErrorLog("faied to table:"+DirName); continue
+        else : DebugLog("success insert table")
+        
+        #6 更新豆瓣刮削信息到表movies
+        g_DB = mysql.connector.connect( host="localhost",  user="dummy",  passwd="" , database="db_movies")
+        g_MyCursor = g_DB.cursor()
+        up_sql = "update movies set \
+                 DoubanID=%s,IMDBID=%s,ForeignName=%s,Director=%s,Actors=%s,Episodes=%s,Poster=%s,DoubanScore=%s,IMDBScore=%s,OtherNames=%s where Number=%s and Copy=%s"
+        up_val =(tDoubanID,  tIMDBID,  tForeignName,  tDirector,  tActors,  tEpisodes, tPoster,  tDoubanScore,   tIMDBScore, tOtherNames,         Number,       Copy)
+        try:
+            g_MyCursor.execute(up_sql,up_val)
+            g_DB.commit()
+        except Exception as err:
+            print(err)
+            ErrorLog("update error:"+DirName+":"+up_sql)
+            g_DB.close()
+            continue
+        else:
+            g_DB.close()
+            DebugLog("success update table:"+DirName)
+        
+        #7 把种子分类设为空    
+        torrent.set_category(category="")
+    return 1
     
 def StopQB():
 
@@ -998,6 +1177,7 @@ def TrackerData():
     global LeagueHDDataList
     global HDAreaDataList
     global AVGVDataList 
+    global HDSkyDataList 
 
     tFRDSData = 0
     tMTeamData = 0
@@ -1010,6 +1190,7 @@ def TrackerData():
     tLeagueHDData = 0
     tHDAreaData = 0
     tAVGVData  = 0    
+    tHDSkyData  = 0    
     i = 0
     while i < len(gTorrentList):
         if len(gTorrentList[i].DateData) == 0 : ErrorLog("datedata is null:"+gTorrentList[i].HASH); i+=1; continue
@@ -1030,6 +1211,7 @@ def TrackerData():
         elif Tracker.find("leaguehd") >= 0:   tLeagueHDData += tData
         elif Tracker.find("hdarea") >= 0:     tHDAreaData += tData
         elif Tracker.find("avgv") >= 0:       tAVGVData += tData
+        elif Tracker.find("hdsky") >= 0:      tHDSkyData += tData
         else: ErrorLog("unknown tracker:"+gTorrentList[i].HASH); i+=1; continue
         i += 1
     
@@ -1044,6 +1226,7 @@ def TrackerData():
     LeagueHDDataList.append({'Date':gToday,'Data':tLeagueHDData})
     HDAreaDataList.append({'Date':gToday,'Data':tHDAreaData})
     AVGVDataList.append({'Date':gToday,'Data':tAVGVData})
+    HDSkyDataList.append({'Date':gToday,'Data':tHDSkyData})
 
 
     if len(FRDSDataList) > 30: del FRDSDataList[0]
@@ -1057,6 +1240,7 @@ def TrackerData():
     if len(LeagueHDDataList) > 30: del LeagueHDDataList[0]
     if len(HDAreaDataList) > 30: del HDAreaDataList[0]
     if len(AVGVDataList) > 30: del AVGVDataList[0]
+    if len(HDSkyDataList) > 30: del HDSkyDataList[0]
 
     DebugLog("FRDS      upload(M):"+str(tFRDSData/(1000*1000)))
     DebugLog("MTeam     upload(M):"+str(tMTeamData/(1000*1000)))
@@ -1069,6 +1253,7 @@ def TrackerData():
     DebugLog("LeagueHD  upload(M):"+str(tLeagueHDData/(1000*1000)))
     DebugLog("HDArea    upload(M):"+str(tHDAreaData/(1000*1000)))
     DebugLog("AVGV      upload(M):"+str(tAVGVData/(1000*1000)))
+    DebugLog("HDSky     upload(M):"+str(tHDSkyData/(1000*1000)))
 
     DebugLog("FRDS      "+GetDaysOfNoUpload(FRDSDataList)+" days no upload")
     DebugLog("MTeam     "+GetDaysOfNoUpload(MTeamDataList)+" days no upload")
@@ -1081,6 +1266,7 @@ def TrackerData():
     DebugLog("LeagueHD  "+GetDaysOfNoUpload(LeagueHDDataList)+" days no upload")
     DebugLog("HDArea    "+GetDaysOfNoUpload(HDAreaDataList)+" days no upload")
     DebugLog("AVGV      "+GetDaysOfNoUpload(AVGVDataList)+" days no upload")
+    DebugLog("HDSKy     "+GetDaysOfNoUpload(HDSkyDataList)+" days no upload")
     
     return 1
     
@@ -1099,6 +1285,7 @@ def ReadTrackerBackup():
     global LeagueHDDataList
     global HDAreaDataList
     global AVGVDataList 
+    global HDSkyDataList 
     
     #
     if not os.path.isfile(TrackerListBackup):
@@ -1129,6 +1316,7 @@ def ReadTrackerBackup():
         elif Tracker == "LeagueHD": LeagueHDDataList = DateData
         elif Tracker == "HDArea": HDAreaDataList = DateData
         elif Tracker == "AVGV": AVGVDataList = DateData
+        elif Tracker == "HDSky": HDSkyDataList = DateData
         else :  ErrorLog("unknown track in TrackBackup:"+Tracker) 
         
     #end for 
@@ -1202,6 +1390,7 @@ def WriteTrackerBackup():
     tStr = "LeagueHD|" +GetDateDataStr(LeagueHDDataList);  fo.write(tStr+'\n')
     tStr = "HDArea|"   +GetDateDataStr(HDAreaDataList);  fo.write(tStr+'\n')
     tStr = "AVGV|"     +GetDateDataStr(AVGVDataList);  fo.write(tStr+'\n')
+    tStr = "HDSky|"    +GetDateDataStr(HDSkyDataList);  fo.write(tStr+'\n')
     
     fo.close()
     DebugLog("success write tracklist")
@@ -1262,14 +1451,15 @@ if __name__ == '__main__' :
             TrackerData()
             WriteTrackerBackup()
 
-            
-        
         #转移QB的种子（停止状态，分类为保种）到TR做种
         tNumber = MoveTorrents()
         if tNumber > 0 : DebugLog(str(tNumber)+" torrents moved")
         
         #写入TRCategory
         if gTRCategoryUpdate == True : WriteTRCategory()
+        
+        #将QB分类为save的种子保存到tobe目录
+        SaveTorrents()
         
         #检查一下内存占用
         tMem = psutil.virtual_memory()
