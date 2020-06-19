@@ -86,6 +86,7 @@ class Movie:
     ErrorLogFile=""
     DBUserName=""
     DBPassword=""
+    DBName    =""
      
     def __init__(self,DirPath,DirName):
         Movie.Count += 1
@@ -407,7 +408,7 @@ class Movie:
 
         elif MinFromMkv != 0 and abs(self.Min-MinFromMkv) >= 2:
             self.Min = MinFromMkv ; self.DirNameToDo = 1
-            DebugLog("Min-MinFromMkv >= 2")
+            self.DebugLog("Min-MinFromMkv >= 2")
         else:
             pass
             
@@ -520,8 +521,8 @@ class Movie:
                         self.DebugLog ("find SP video:"+File)
                         self.NumberOfSP += 1
                     elif re.search("sample",File,re.I):
-                        self.DebugLog ("find sample video:"+File)
-                        self.ErrorLog("sample video:"+File)  #仅记录，不做处理，待手工处理
+                        self.DebugLog ("find sample video:"+File+"::"+self.DirName)
+                        self.ErrorLog("sample video:"+File+"::"+self.DirName)  #仅记录，不做处理，待手工处理
                         self.SampleVideo = File 
                     else:
                         self.NumberOfVideo += 1
@@ -791,6 +792,7 @@ class Movie:
             elif TempStr.upper() == "JPN" or \
                  TempStr.upper() == "GBR" or \
                  TempStr.upper() == "KOR" or \
+                 TempStr.upper() == "ESP" or \
                  TempStr.upper() == "USA" or \
                  TempStr.upper() == "FRA" or \
                  TempStr.upper() == "TW" or \
@@ -860,6 +862,7 @@ class Movie:
                  TempStr[0:5] == "dtshd" or\
                  TempStr[0:3] == "ac3" or \
                  TempStr[0:3] == "aac" or \
+                 TempStr[0:3] == "dd1" or \
                  TempStr[0:3] == "dd2" or \
                  TempStr[0:3] == "dd5" or \
                  TempStr[0:3] == "dda" or \
@@ -1003,7 +1006,7 @@ class Movie:
           host   = "localhost",      # 数据库主机地址
           user   = Movie.DBUserName,  # 数据库用户名
           passwd = Movie.DBPassword,  # 数据库密码
-          database="db_movies"
+          database=Movie.DBName
         )
         g_MyCursor = g_DB.cursor()
         
@@ -1052,7 +1055,8 @@ class Movie:
             try:
                 g_MyCursor.execute(in_sql,in_val)
                 g_DB.commit()
-            except:
+            except Exception as err:
+                print (err)
                 self.ErrorLog("insert error:"+DirName)
                 g_DB.close()
                 return TABLE_ERROR
